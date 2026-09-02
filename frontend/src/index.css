@@ -1,0 +1,38 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+
+* {
+  font-family: 'DM Sans', sans-serif;
+}
+
+
+body {
+  background: #0d0b1a;
+  overflow: hidden;
+  height: 100vh;
+}
+
+
+h1, h2, .font-display {
+  font-family: 'Syne', sans-serif;
+}
+
+
+.glass {
+  background: rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+
+#windy { width: 100%; height: 100%; }
+
+
+* { -webkit-tap-highlight-color: transparent; }
