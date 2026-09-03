@@ -282,24 +282,6 @@ export default function WeatherHome({ location, language, onOpenLocationPicker }
             ))}
           </div>
         )}
-
-        {/* Active Ensemble Telemetry Sources Chip Bar */}
-        {weather?.providersUsed?.length > 0 && (
-          <div className="max-w-6xl mx-auto mt-2 pt-2 border-t border-white/10 flex items-center gap-2 overflow-x-auto no-scrollbar text-xs">
-            <span className="text-[10px] uppercase font-bold text-emerald-400 tracking-wider flex items-center gap-1 flex-shrink-0">
-              <Activity size={12} className="text-emerald-400" /> Fused Telemetry ({weather.providersUsed.length}):
-            </span>
-            {weather.providersUsed.map((p, i) => (
-              <span
-                key={i}
-                className="glass rounded-full px-2.5 py-0.5 text-[11px] text-white/90 bg-white/5 border border-white/15 flex items-center gap-1 flex-shrink-0"
-              >
-                <span className="font-semibold">{p.name}</span>
-                <span className="text-white/40">({p.temp}°C)</span>
-              </span>
-            ))}
-          </div>
-        )}
       </div>
 
       {/* Main Dashboard Scroll Area */}
