@@ -6,7 +6,7 @@ import { Sun, Send, ShieldAlert } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
-function ChatAlertWidget({ data }) {
+function ChatAlertWidget({ data, langCode = 'en' }) {
   if (!data) return null
   const { city, level, title, advisory, action } = data
   const isRed = level === 'RED'
@@ -19,7 +19,7 @@ function ChatAlertWidget({ data }) {
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-1.5">
           <ShieldAlert size={18} style={{ color: badgeBg }} />
-          <span className="font-bold font-display text-sm">{title || 'Official Weather Warning'}</span>
+          <span className="font-bold font-display text-sm">{title || Translations.get(langCode, 'officialWarning')}</span>
         </div>
         <span className="text-[10px] uppercase font-bold text-white px-2 py-0.5 rounded-full" style={{ background: badgeBg }}>
           {level || 'IMD'} ALERT
@@ -37,7 +37,7 @@ function ChatAlertWidget({ data }) {
   )
 }
 
-function ChatWeatherWidget({ data }) {
+function ChatWeatherWidget({ data, langCode = 'en' }) {
   if (!data) return null
   const { city, temp, feelsLike, condition, humidity, windSpeed, advisory } = data
   return (
@@ -45,10 +45,10 @@ function ChatWeatherWidget({ data }) {
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-1.5">
           <Sun className="text-accent" size={18} />
-          <span className="font-bold font-display text-base">{city || 'Weather Telemetry'}</span>
+          <span className="font-bold font-display text-base">{city || Translations.get(langCode, 'weatherTelemetry')}</span>
         </div>
         <span className="text-[10px] uppercase font-bold text-accent bg-accent/20 px-2 py-0.5 rounded-full">
-          Live Card
+          {Translations.get(langCode, 'liveCard')}
         </span>
       </div>
 
@@ -60,19 +60,19 @@ function ChatWeatherWidget({ data }) {
       <div className="grid grid-cols-3 gap-2 pt-2 border-t border-white/10 text-center">
         {feelsLike != null && (
           <div className="glass rounded-xl p-2">
-            <span className="text-[10px] text-white/50 block">Feels</span>
+            <span className="text-[10px] text-white/50 block">{Translations.get(langCode, 'feelsLike')}</span>
             <span className="text-xs font-bold text-orange-300">{feelsLike}°C</span>
           </div>
         )}
         {humidity != null && (
           <div className="glass rounded-xl p-2">
-            <span className="text-[10px] text-white/50 block">Humidity</span>
+            <span className="text-[10px] text-white/50 block">{Translations.get(langCode, 'humidity')}</span>
             <span className="text-xs font-bold text-sky-300">{humidity}%</span>
           </div>
         )}
         {windSpeed != null && (
           <div className="glass rounded-xl p-2">
-            <span className="text-[10px] text-white/50 block">Wind</span>
+            <span className="text-[10px] text-white/50 block">{Translations.get(langCode, 'wind')}</span>
             <span className="text-xs font-bold text-emerald-300">{windSpeed} km/h</span>
           </div>
         )}
@@ -87,15 +87,15 @@ function ChatWeatherWidget({ data }) {
   )
 }
 
-function ChatForecastWidget({ data }) {
+function ChatForecastWidget({ data, langCode = 'en' }) {
   if (!data || !Array.isArray(data.days)) return null
   return (
     <div className="glass rounded-2xl p-4 my-3 border border-white/15 shadow-lg text-white max-w-full">
       <div className="flex items-center justify-between mb-3">
         <span className="text-xs font-bold uppercase tracking-wider text-accent flex items-center gap-1">
-          <Sun size={14} /> {data.city ? `${data.city} Forecast` : 'Weather Forecast'}
+          <Sun size={14} /> {data.city ? `${data.city} ${Translations.get(langCode, 'forecast')}` : Translations.get(langCode, 'forecast')}
         </span>
-        <span className="text-[10px] text-white/40">{data.days.length} Days</span>
+        <span className="text-[10px] text-white/40">{data.days.length} {Translations.get(langCode, 'days')}</span>
       </div>
 
       <div className="flex gap-2.5 overflow-x-auto no-scrollbar pb-1">
@@ -161,9 +161,9 @@ function BotMessage({ text }) {
               try {
                 const cleanedJson = rawStr.replace(/^widget:(weather|forecast|alert)/, '').trim()
                 const parsedData = JSON.parse(cleanedJson)
-                if (match[1] === 'weather') return <ChatWeatherWidget data={parsedData} />
-                if (match[1] === 'forecast') return <ChatForecastWidget data={parsedData} />
-                if (match[1] === 'alert') return <ChatAlertWidget data={parsedData} />
+                if (match[1] === 'weather') return <ChatWeatherWidget data={parsedData} langCode={langCode} />
+                if (match[1] === 'forecast') return <ChatForecastWidget data={parsedData} langCode={langCode} />
+                if (match[1] === 'alert') return <ChatAlertWidget data={parsedData} langCode={langCode} />
               } catch (err) {
                 // Fall back if JSON parsing fails
               }
@@ -199,6 +199,7 @@ export default function ChatView({ messages, setMessages, initialMessage = '', o
   const messagesEndRef = useRef(null)
   const voiceHandledRef = useRef('')
 
+  const langCode = language?.code || 'en'
   const locationContext = location?.name ? `${location.name}${location.country ? `, ${location.country}` : ''}` : ''
   const languageName = language?.name || 'English'
 
@@ -223,7 +224,7 @@ export default function ChatView({ messages, setMessages, initialMessage = '', o
       .catch(() => {
         setMessages((prev) => [
           ...prev,
-          { text: 'Sorry, I encountered an error. Please try again.', isUser: false },
+          { text: Translations.get(langCode, 'chatErrorMessage'), isUser: false },
         ])
       })
       .finally(() => {
@@ -250,7 +251,7 @@ export default function ChatView({ messages, setMessages, initialMessage = '', o
     } catch (err) {
       setMessages((prev) => [
         ...prev,
-        { text: 'Sorry, I encountered an error fetching weather context. Please try again.', isUser: false },
+        { text: Translations.get(langCode, 'chatErrorMessage'), isUser: false },
       ])
     } finally {
       setLoading(false)
@@ -300,10 +301,10 @@ export default function ChatView({ messages, setMessages, initialMessage = '', o
               <Sun className="text-accent" size={28} />
             </div>
             <h2 className="text-2xl md:text-3xl font-display font-bold text-white mb-2">
-              Hello! Where are we checking the weather?
+              {Translations.get(langCode, 'chatWelcomeHeading')}
             </h2>
             <p className="text-white/60 text-sm md:text-base mb-8 max-w-md">
-              Ask about current conditions, 7-day forecasts, rain predictions, or travel recommendations across India in any language.
+              {Translations.get(langCode, 'chatWelcomeSub')}
             </p>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full">
@@ -339,7 +340,7 @@ export default function ChatView({ messages, setMessages, initialMessage = '', o
                         : 'glass rounded-3xl rounded-bl-md text-white/95 max-w-[95%] sm:max-w-[90%] shadow-lg'
                     }`}
                   >
-                    {msg.isUser ? msg.text : <BotMessage text={msg.text} />}
+                    {msg.isUser ? msg.text : <BotMessage text={msg.text} langCode={langCode} />}
                   </div>
                 </div>
               </AnimatedContent>
@@ -351,7 +352,7 @@ export default function ChatView({ messages, setMessages, initialMessage = '', o
                   <div className="w-5 h-5 rounded-md bg-accent/20 flex items-center justify-center">
                     <Sun size={12} className="text-accent" />
                   </div>
-                  <span>WeatherGPT is thinking...</span>
+                  <span>{Translations.get(langCode, 'botThinking')}</span>
                 </div>
                 <div className="glass rounded-3xl rounded-bl-md px-5 py-3.5 flex gap-1.5 items-center">
                   {[0, 1, 2].map((i) => (

@@ -10,6 +10,7 @@ import ChatView from './views/ChatView'
 import MapView from './views/MapView'
 import DevView from './views/DevView'
 import { autoDetectUserLocation } from './utils/location'
+import { Translations } from './utils/translations'
 
 const DEFAULT_LOCATION = {
   name: 'New Delhi',
@@ -19,10 +20,10 @@ const DEFAULT_LOCATION = {
 }
 
 const mobileNavItems = [
-  { id: 'home', icon: Sun, label: 'Weather' },
-  { id: 'chat', icon: MessageSquare, label: 'Chat' },
-  { id: 'map', icon: Map, label: 'Map' },
-  { id: 'dev', icon: Terminal, label: 'Developer' },
+  { id: 'home', icon: Sun, label: 'Weather', translationKey: 'navWeather' },
+  { id: 'chat', icon: MessageSquare, label: 'Chat', translationKey: 'navChat' },
+  { id: 'map', icon: Map, label: 'Map', translationKey: 'navMap' },
+  { id: 'dev', icon: Terminal, label: 'Developer', translationKey: 'navDev' },
 ]
 
 export default function App() {
@@ -108,7 +109,7 @@ export default function App() {
         language={language}
       />
     ),
-    map: <MapView location={location} />,
+    map: <MapView location={location} language={language} />,
     dev: <DevView location={location} language={language} />,
   }
 
@@ -176,6 +177,7 @@ export default function App() {
               {mobileNavItems.map((item) => {
                 const Icon = item.icon
                 const isActive = activeView === item.id
+                const label = Translations.get(language?.code, item.translationKey)
                 return (
                   <button
                     key={item.id}
@@ -190,7 +192,7 @@ export default function App() {
                     }`}
                   >
                     <Icon size={18} className={isActive ? 'text-white' : 'text-accent'} />
-                    <span>{item.label}</span>
+                    <span>{label}</span>
                   </button>
                 )
               })}
@@ -219,6 +221,7 @@ export default function App() {
         onClose={() => setIsLocationModalOpen(false)}
         onSelectLocation={handleSelectLocation}
         currentLocation={location}
+        language={language}
       />
 
       <LanguagePickerModal
@@ -230,3 +233,4 @@ export default function App() {
     </div>
   )
 }
+

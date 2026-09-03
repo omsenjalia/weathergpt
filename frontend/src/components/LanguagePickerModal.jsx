@@ -1,11 +1,12 @@
 import { motion, AnimatePresence } from 'framer-motion'
 import { Languages, X, Check } from 'lucide-react'
+import { Translations } from '../utils/translations'
 
 export const INDIAN_LANGUAGES = [
   { code: 'en', name: 'English', native: 'English', speechCode: 'en-IN' },
   { code: 'hi', name: 'Hindi', native: 'हिंदी', speechCode: 'hi-IN' },
   { code: 'gu', name: 'Gujarati', native: 'ગુજરાતી', speechCode: 'gu-IN' },
-  { code: 'mr', name: 'Marathi', native: 'मराठी', speechCode: 'mr-IN' },
+  { code: 'mr', name: 'Marathi', native: 'मરાઠી', speechCode: 'mr-IN' },
   { code: 'ta', name: 'Tamil', native: 'தமிழ்', speechCode: 'ta-IN' },
   { code: 'te', name: 'Telugu', native: 'తెలుగు', speechCode: 'te-IN' },
   { code: 'bn', name: 'Bengali', native: 'বাংলা', speechCode: 'bn-IN' },
@@ -16,6 +17,7 @@ export const INDIAN_LANGUAGES = [
 
 export default function LanguagePickerModal({ isOpen, onClose, onSelectLanguage, currentLanguage }) {
   if (!isOpen) return null
+  const langCode = currentLanguage?.code || 'en'
 
   return (
     <AnimatePresence>
@@ -44,8 +46,12 @@ export default function LanguagePickerModal({ isOpen, onClose, onSelectLanguage,
                 <Languages size={18} className="text-accent" />
               </div>
               <div>
-                <h3 className="text-white text-lg font-bold font-display">Select Language</h3>
-                <p className="text-white/50 text-xs">Choose preferred Indian regional language</p>
+                <h3 className="text-white text-lg font-bold font-display">
+                  {Translations.get(langCode, 'selectLanguageTitle')}
+                </h3>
+                <p className="text-white/50 text-xs">
+                  {Translations.get(langCode, 'selectLanguageSub')}
+                </p>
               </div>
             </div>
             <button

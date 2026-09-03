@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { MapPin, Search, Navigation, X, Check, Loader2 } from 'lucide-react'
 import axios from 'axios'
 import { reverseGeocode, detectLocationFromIP } from '../utils/location'
+import { Translations } from '../utils/translations'
 
 const POPULAR_CITIES = [
   { name: 'Mumbai', country: 'India', lat: 19.076, lon: 72.8777 },
@@ -17,11 +18,12 @@ const POPULAR_CITIES = [
   { name: 'Surat', country: 'India', lat: 21.1702, lon: 72.8311 },
 ]
 
-export default function LocationPickerModal({ isOpen, onClose, onSelectLocation, currentLocation }) {
+export default function LocationPickerModal({ isOpen, onClose, onSelectLocation, currentLocation, language }) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState([])
   const [searching, setSearching] = useState(false)
   const [detectingGps, setDetectingGps] = useState(false)
+  const langCode = language?.code || 'en'
 
   // Search auto-complete
   useEffect(() => {
@@ -135,8 +137,8 @@ export default function LocationPickerModal({ isOpen, onClose, onSelectLocation,
                 <MapPin size={18} className="text-accent" />
               </div>
               <div>
-                <h3 className="text-white text-lg font-bold font-display">Select Location</h3>
-                <p className="text-white/50 text-xs">Search worldwide or pick a popular city</p>
+                <h3 className="text-white text-lg font-bold font-display">{Translations.get(langCode, 'selectLocationTitle')}</h3>
+                <p className="text-white/50 text-xs">{Translations.get(langCode, 'selectLocationSub')}</p>
               </div>
             </div>
             <button
@@ -156,12 +158,12 @@ export default function LocationPickerModal({ isOpen, onClose, onSelectLocation,
             {detectingGps ? (
               <>
                 <Loader2 size={16} className="animate-spin text-accent" />
-                <span>Detecting GPS Location...</span>
+                <span>{Translations.get(langCode, 'detectingGps')}</span>
               </>
             ) : (
               <>
                 <Navigation size={16} className="text-accent" />
-                <span>Use My Current Location (GPS)</span>
+                <span>{Translations.get(langCode, 'useGps')}</span>
               </>
             )}
           </button>
@@ -172,7 +174,7 @@ export default function LocationPickerModal({ isOpen, onClose, onSelectLocation,
               autoFocus
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search city manually (e.g. Jaipur, Dubai, London)..."
+              placeholder={Translations.get(langCode, 'searchCityPlaceholder')}
               className="w-full bg-white/5 border border-white/15 rounded-2xl pl-10 pr-10 py-3 text-white text-sm placeholder:text-white/40 focus:outline-none focus:ring-1 focus:ring-accent/60"
             />
             <Search size={18} className="absolute left-3.5 top-3.5 text-white/40" />
@@ -205,14 +207,14 @@ export default function LocationPickerModal({ isOpen, onClose, onSelectLocation,
             </div>
           ) : query.length >= 2 && !searching ? (
             <div className="text-center py-4 text-white/40 text-sm">
-              No matching cities found for &quot;{query}&quot;.
+              {Translations.get(langCode, 'noCitiesFound')} &quot;{query}&quot;.
             </div>
           ) : null}
 
           {/* Popular Cities Section */}
           <div className="mt-2 pt-4 border-t border-white/10">
             <p className="text-white/50 text-xs uppercase font-semibold tracking-wider mb-3">
-              Popular Cities in India
+              {Translations.get(langCode, 'popularCities')}
             </p>
             <div className="flex flex-wrap gap-2 overflow-y-auto no-scrollbar max-h-40">
               {POPULAR_CITIES.map((c, i) => {

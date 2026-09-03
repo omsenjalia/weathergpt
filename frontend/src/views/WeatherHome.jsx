@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { getWeatherByCoords, geocodeCity, getAirQualityByCoords } from '../api'
-import { Translations, translateCondition } from '../utils/translations'
+import { Translations, translateCondition, formatDay } from '../utils/translations'
 import BlurText from '../components/bits/BlurText'
 import AnimatedContent from '../components/bits/AnimatedContent'
 import {
@@ -53,11 +53,6 @@ function formatHour(isoString) {
   return h > 12 ? `${h - 12}PM` : `${h}AM`
 }
 
-function formatDay(isoString) {
-  const d = new Date(isoString + 'T00:00:00')
-  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
-}
-
 function formatClockTime(isoString) {
   if (!isoString) return '--:--'
   const d = new Date(isoString)
@@ -69,21 +64,21 @@ function getCardinalDirection(angle) {
   return directions[Math.round(angle / 45) % 8]
 }
 
-function getUVCategory(uv) {
-  if (uv <= 2) return { label: 'Low', color: '#10b981', desc: 'Minimal risk. Enjoy outdoor activities!' }
-  if (uv <= 5) return { label: 'Moderate', color: '#f59e0b', desc: 'Wear sunglasses & SPF 30+.' }
-  if (uv <= 7) return { label: 'High', color: '#f97316', desc: 'Reduce sun exposure between 10am - 4pm.' }
-  if (uv <= 10) return { label: 'Very High', color: '#ef4444', desc: 'Extra protection needed. Seek shade.' }
-  return { label: 'Extreme', color: '#a855f7', desc: 'Avoid outdoor sun during peak hours.' }
+function getUVCategory(uv, langCode = 'en') {
+  if (uv <= 2) return { label: Translations.get(langCode, 'uvLow'), color: '#10b981', desc: Translations.get(langCode, 'uvLowDesc') }
+  if (uv <= 5) return { label: Translations.get(langCode, 'uvModerate'), color: '#f59e0b', desc: Translations.get(langCode, 'uvModDesc') }
+  if (uv <= 7) return { label: Translations.get(langCode, 'uvHigh'), color: '#f97316', desc: Translations.get(langCode, 'uvHighDesc') }
+  if (uv <= 10) return { label: Translations.get(langCode, 'uvVeryHigh'), color: '#ef4444', desc: Translations.get(langCode, 'uvVeryHighDesc') }
+  return { label: Translations.get(langCode, 'uvExtreme'), color: '#a855f7', desc: Translations.get(langCode, 'uvExtremeDesc') }
 }
 
-function getAQICategory(aqi) {
-  if (aqi <= 50) return { label: 'Good', color: '#10b981', desc: 'Air quality is satisfactory.' }
-  if (aqi <= 100) return { label: 'Moderate', color: '#f59e0b', desc: 'Acceptable air quality.' }
-  if (aqi <= 150) return { label: 'Unhealthy for Sensitive', color: '#f97316', desc: 'Limit outdoor exertion.' }
-  if (aqi <= 200) return { label: 'Unhealthy', color: '#ef4444', desc: 'Health effects for everyone.' }
-  if (aqi <= 300) return { label: 'Very Unhealthy', color: '#a855f7', desc: 'Health alert.' }
-  return { label: 'Hazardous', color: '#881337', desc: 'Emergency warnings.' }
+function getAQICategory(aqi, langCode = 'en') {
+  if (aqi <= 50) return { label: Translations.get(langCode, 'aqiGood'), color: '#10b981', desc: Translations.get(langCode, 'aqiGoodDesc') }
+  if (aqi <= 100) return { label: Translations.get(langCode, 'aqiModerate'), color: '#f59e0b', desc: Translations.get(langCode, 'aqiModDesc') }
+  if (aqi <= 150) return { label: Translations.get(langCode, 'aqiUnhealthySensitive'), color: '#f97316', desc: Translations.get(langCode, 'aqiUnsensitiveDesc') }
+  if (aqi <= 200) return { label: Translations.get(langCode, 'aqiUnhealthy'), color: '#ef4444', desc: Translations.get(langCode, 'aqiUnhealthyDesc') }
+  if (aqi <= 300) return { label: Translations.get(langCode, 'aqiVeryUnhealthy'), color: '#a855f7', desc: Translations.get(langCode, 'aqiVeryUnhealthyDesc') }
+  return { label: Translations.get(langCode, 'aqiHazardous'), color: '#881337', desc: Translations.get(langCode, 'aqiHazardousDesc') }
 }
 
 export default function WeatherHome({ location, language, onOpenLocationPicker }) {
@@ -208,14 +203,14 @@ export default function WeatherHome({ location, language, onOpenLocationPicker }
   if (loading) {
     return (
       <div className="flex-1 flex items-center justify-center pb-24">
-        <p className="text-white/50 animate-pulse text-lg">Gathering telemetry...</p>
+        <p className="text-white/50 animate-pulse text-lg">{t('gatheringTelemetry')}</p>
       </div>
     )
   }
 
-  const activeCityName = location?.name || 'Selected Location'
-  const uvInfo = getUVCategory(weather.uvIndex)
-  const aqiInfo = weather.aqi ? getAQICategory(weather.aqi) : null
+  const activeCityName = location?.name || t('selectedLocation')
+  const uvInfo = getUVCategory(weather.uvIndex, langCode)
+  const aqiInfo = weather.aqi ? getAQICategory(weather.aqi, langCode) : null
   const displayedForecast = forecastTab === '7days' ? forecast.slice(0, 7) : forecast
   const isCurrentFavorite = favorites.some((f) => f.name.toLowerCase() === activeCityName.toLowerCase())
 
@@ -280,7 +275,7 @@ export default function WeatherHome({ location, language, onOpenLocationPicker }
                 <AlertTriangle size={22} className="text-amber-400 flex-shrink-0" />
                 <div className="flex-1">
                   <span className="text-amber-300 font-bold text-xs uppercase tracking-wider block mb-0.5">
-                    Weather & Environmental Hazard Advisory
+                    {t('hazardAdvisory')}
                   </span>
                   <p className="text-white text-xs md:text-sm leading-snug">{hazards[0]}</p>
                 </div>
@@ -349,7 +344,7 @@ export default function WeatherHome({ location, language, onOpenLocationPicker }
 
                     <div className="my-2">
                       <div className="text-3xl font-display font-bold text-white mb-1">
-                        {Math.round(weather.aqi)} <span className="text-sm font-normal text-white/50">US AQI</span>
+                        {Math.round(weather.aqi)} <span className="text-sm font-normal text-white/50">{t('usAqi')}</span>
                       </div>
                       <div className="w-full h-2.5 rounded-full bg-white/10 overflow-hidden relative mt-2">
                         <div
@@ -486,7 +481,7 @@ export default function WeatherHome({ location, language, onOpenLocationPicker }
                       <p className="text-3xl font-bold font-display text-white">
                         {Math.round(weather.pressure)} <span className="text-sm text-white/50 font-normal">hPa</span>
                       </p>
-                      <span className="text-xs text-emerald-400 font-medium">Standard Pressure</span>
+                      <span className="text-xs text-emerald-400 font-medium">{t('standardPressure')}</span>
                     </div>
                   </div>
                 </AnimatedContent>
@@ -505,7 +500,7 @@ export default function WeatherHome({ location, language, onOpenLocationPicker }
                       <h3 className="text-white/60 text-xs font-semibold uppercase tracking-wider flex items-center gap-1.5">
                         <Clock size={14} className="text-accent" /> {t('hourlyForecast')}
                       </h3>
-                      <span className="text-xs text-white/40">24 Hours</span>
+                      <span className="text-xs text-white/40">{t('twentyFourHours')}</span>
                     </div>
 
                     <div className="flex gap-3 overflow-x-auto no-scrollbar pb-2">
@@ -520,7 +515,7 @@ export default function WeatherHome({ location, language, onOpenLocationPicker }
                           }`}
                         >
                           <span className="text-white/60 text-xs font-medium">
-                            {i === 0 ? 'Now' : formatHour(h.time)}
+                            {i === 0 ? t('now') : formatHour(h.time)}
                           </span>
                           <WeatherIcon code={h.code} size={24} />
                           <span className="text-white text-sm font-bold">
@@ -554,7 +549,7 @@ export default function WeatherHome({ location, language, onOpenLocationPicker }
                       <WeatherIcon code={selectedHour.code} size={36} />
                       <div>
                         <h4 className="text-white font-bold text-base font-display">
-                          Hourly Telemetry ({formatHour(selectedHour.time)})
+                          {t('hourlyTelemetry')} ({formatHour(selectedHour.time)})
                         </h4>
                         <p className="text-white/60 text-xs">{translateCondition(selectedHour.code, langCode)}</p>
                       </div>
@@ -623,7 +618,7 @@ export default function WeatherHome({ location, language, onOpenLocationPicker }
                           className="flex justify-between items-center px-4 py-3 rounded-2xl hover:bg-white/5 transition-colors border border-transparent hover:border-white/10"
                         >
                           <span className="text-white font-medium w-28 text-sm">
-                            {i === 0 ? t('today') : formatDay(day.date)}
+                            {i === 0 ? t('today') : formatDay(day.date, langCode)}
                           </span>
 
                           <div className="flex items-center gap-3 flex-1 justify-center sm:justify-start">

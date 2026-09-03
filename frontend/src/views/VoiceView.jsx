@@ -1,16 +1,16 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion } from 'framer-motion'
 import { Mic, MicOff, Languages, Send, RotateCcw } from 'lucide-react'
+import { Translations } from '../utils/translations'
 
 // onSendVoice(text) — called instead of invoking sendMessage directly here.
-// App.jsx stores the transcript and lets ChatView send it, so the response
-// is properly displayed in the chat thread instead of being silently discarded.
 export default function VoiceView({ onSendVoice, language }) {
   const [listening, setListening] = useState(false)
   const [transcript, setTranscript] = useState('')
   const [supported, setSupported] = useState(true)
   const recognitionRef = useRef(null)
 
+  const langCode = language?.code || 'en'
   const activeLangCode = language?.speechCode || 'en-IN'
 
   const isSecure =
@@ -50,7 +50,7 @@ export default function VoiceView({ onSendVoice, language }) {
       setListening(false)
     } else {
       setTranscript('')
-      recognitionRef.current.lang = lang
+      recognitionRef.current.lang = activeLangCode
       recognitionRef.current.start()
       setListening(true)
     }
@@ -67,10 +67,10 @@ export default function VoiceView({ onSendVoice, language }) {
       <div className="flex-1 flex items-center justify-center px-6">
         <div className="glass rounded-3xl p-8 text-center max-w-sm">
           <p className="text-white/70 text-lg mb-4">
-            Voice input requires Chrome browser on mobile or desktop.
+            {Translations.get(langCode, 'voiceBrowserWarning')}
           </p>
           <p className="text-white/50 text-sm mb-6">
-            Please type your query in the Chat tab instead.
+            {Translations.get(langCode, 'typeQueryFallback')}
           </p>
         </div>
       </div>
@@ -81,29 +81,12 @@ export default function VoiceView({ onSendVoice, language }) {
     <div className="flex-1 flex flex-col items-center justify-center gap-6 sm:gap-8 p-6 pb-24 md:pb-6 overflow-y-auto no-scrollbar">
       {/* Title */}
       <div className="text-center">
-        <h1 className="text-white text-xl sm:text-2xl font-display font-bold mb-2">Voice Assistant</h1>
-        <p className="text-white/50 text-sm sm:text-base">Speak your weather query</p>
-      </div>
-
-      {/* Language Toggle */}
-      <div className="flex items-center gap-2">
-        <Languages className="text-white/40" size={18} />
-        <button
-          onClick={() => setLang('en-IN')}
-          className={`px-4 py-2 rounded-full text-sm font-medium transition-colors touch-target ${
-            lang === 'en-IN' ? 'bg-accent text-white' : 'glass text-white/60'
-          }`}
-        >
-          EN
-        </button>
-        <button
-          onClick={() => setLang('hi-IN')}
-          className={`px-4 py-2 rounded-full text-sm font-medium transition-colors touch-target ${
-            lang === 'hi-IN' ? 'bg-accent text-white' : 'glass text-white/60'
-          }`}
-        >
-          HI
-        </button>
+        <h1 className="text-white text-xl sm:text-2xl font-display font-bold mb-2">
+          {Translations.get(langCode, 'voiceAssistant')}
+        </h1>
+        <p className="text-white/50 text-sm sm:text-base">
+          {Translations.get(langCode, 'speakQuery')}
+        </p>
       </div>
 
       {/* Microphone Button */}
@@ -135,7 +118,7 @@ export default function VoiceView({ onSendVoice, language }) {
       {/* Transcript */}
       <div className="glass rounded-2xl px-6 py-4 mx-4 min-h-16 w-full max-w-md text-center">
         <p className={`text-base sm:text-lg ${transcript ? 'text-white' : 'text-white/30'}`}>
-          {transcript || 'Tap the mic and speak...'}
+          {transcript || Translations.get(langCode, 'tapMic')}
         </p>
       </div>
 
@@ -144,15 +127,15 @@ export default function VoiceView({ onSendVoice, language }) {
         <div className="flex gap-3">
           <button
             onClick={handleSendToChat}
-            className="bg-accent rounded-xl px-6 py-3 text-white font-medium flex items-center gap-2 touch-target"
+            className="bg-accent rounded-xl px-6 py-3 text-white font-medium flex items-center gap-2 touch-target cursor-pointer"
           >
-            <Send size={16} /> Send to Chat
+            <Send size={16} /> {Translations.get(langCode, 'sendToChatBtn')}
           </button>
           <button
             onClick={() => setTranscript('')}
-            className="glass rounded-xl px-6 py-3 text-white/70 font-medium flex items-center gap-2 touch-target"
+            className="glass rounded-xl px-6 py-3 text-white/70 font-medium flex items-center gap-2 touch-target cursor-pointer"
           >
-            <RotateCcw size={16} /> Clear
+            <RotateCcw size={16} /> {Translations.get(langCode, 'clearBtn')}
           </button>
         </div>
       )}

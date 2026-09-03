@@ -1,10 +1,11 @@
-import { Sun, MessageSquare, Map, MapPin, Languages } from 'lucide-react'
+import { Sun, MessageSquare, Map, Terminal, MapPin, Languages } from 'lucide-react'
 import { Translations } from '../utils/translations'
 
 const navItems = [
   { id: 'home', icon: Sun, translationKey: 'navWeather' },
   { id: 'chat', icon: MessageSquare, translationKey: 'navChat' },
   { id: 'map', icon: Map, translationKey: 'navMap' },
+  { id: 'dev', icon: Terminal, translationKey: 'navDev' },
 ]
 
 export default function Sidebar({
@@ -27,7 +28,7 @@ export default function Sidebar({
           </div>
           <div>
             <h1 className="text-white text-xl font-display font-bold tracking-tight">WeatherGPT</h1>
-            <p className="text-white/40 text-xs font-medium">Multilingual Weather Agent</p>
+            <p className="text-white/40 text-xs font-medium">{Translations.get(langCode, 'multilingualWeatherAgent')}</p>
           </div>
         </div>
 
@@ -91,11 +92,11 @@ export default function Sidebar({
 
         <div className="glass rounded-2xl p-3 border border-white/10">
           <div className="flex items-center justify-between mb-1">
-            <span className="text-accent text-[10px] font-semibold uppercase tracking-wider">Multilingual AI</span>
+            <span className="text-accent text-[10px] font-semibold uppercase tracking-wider">{Translations.get(langCode, 'multilingualAi')}</span>
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
           </div>
           <p className="text-white/50 text-[11px] leading-relaxed">
-            10 Indian Languages Supported
+            {Translations.get(langCode, 'tenLanguagesSupported')}
           </p>
         </div>
       </div>
