@@ -241,12 +241,12 @@ export async function getEnsembleWeather(lat, lon, days = 14) {
     if (s.uvIndex != null && s.uvIndex > 0) weightedUV += s.uvIndex * w
   })
 
-  const fusedTemp = totalWeight > 0 ? weightedTemp / totalWeight : baseOpenMeteo?.temp ?? 25
-  const fusedFeelsLike = totalWeight > 0 ? weightedFeelsLike / totalWeight : baseOpenMeteo?.feelsLike ?? fusedTemp
+  const fusedTemp = totalWeight > 0 ? Math.round((weightedTemp / totalWeight) * 10) / 10 : baseOpenMeteo?.temp ?? 25
+  const fusedFeelsLike = totalWeight > 0 ? Math.round((weightedFeelsLike / totalWeight) * 10) / 10 : baseOpenMeteo?.feelsLike ?? fusedTemp
   const fusedHumidity = totalWeight > 0 ? Math.round(weightedHumidity / totalWeight) : baseOpenMeteo?.humidity ?? 50
   const fusedWindSpeed = totalWeight > 0 ? Math.round(weightedWindSpeed / totalWeight) : baseOpenMeteo?.windSpeed ?? 10
   const fusedPressure = totalWeight > 0 ? Math.round(weightedPressure / totalWeight) : baseOpenMeteo?.pressure ?? 1013
-  const fusedUV = totalWeight > 0 ? weightedUV / totalWeight : baseOpenMeteo?.uvIndex ?? 0
+  const fusedUV = totalWeight > 0 ? Math.round((weightedUV / totalWeight) * 10) / 10 : baseOpenMeteo?.uvIndex ?? 0
 
   // Air Quality: Pick first provider that supplies valid AQI telemetry
   const aqiProvider = validSources.find((s) => s.aqi != null)
