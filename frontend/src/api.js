@@ -1,6 +1,8 @@
 import axios from 'axios';
 
-const API_BASE = 'http://localhost:8000';
+// Falls back to localhost for local development. Set VITE_API_URL in .env for
+// staging / production deployments.
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 export async function sendMessage(message, location = '') {
   const res = await axios.post(`${API_BASE}/chat`, { message, location });
@@ -12,9 +14,10 @@ export async function getWeatherByCoords(lat, lon) {
     params: {
       latitude: lat,
       longitude: lon,
-      current: 'temperature_2m,apparent_temperature,wind_speed_10m,precipitation,relative_humidity_2m,weathercode',
-      hourly: 'temperature_2m,precipitation_probability,weathercode',
-      daily: 'temperature_2m_max,temperature_2m_min,rain_sum,precipitation_probability_max,weathercode',
+      // Use the current Open-Meteo variable name (previously 'weathercode')
+      current: 'temperature_2m,apparent_temperature,wind_speed_10m,precipitation,relative_humidity_2m,weather_code',
+      hourly: 'temperature_2m,precipitation_probability,weather_code',
+      daily: 'temperature_2m_max,temperature_2m_min,rain_sum,precipitation_probability_max,weather_code',
       forecast_days: 7,
       timezone: 'auto',
     }

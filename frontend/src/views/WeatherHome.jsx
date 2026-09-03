@@ -1,15 +1,17 @@
 import { useState, useEffect } from 'react'
-import { getWeatherByCoords, geocodeCity, sendMessage } from '../api'
+import { getWeatherByCoords, geocodeCity } from '../api'
 import BlurText from '../components/bits/BlurText'
 import AnimatedContent from '../components/bits/AnimatedContent'
 
 const WEATHER_EMOJI = {
   0: '☀️',
-  1: '⛅', 2: '⛅', 3: '⛅',
+  1: '🌤️', 2: '⛅', 3: '☁️',
   45: '🌫️', 48: '🌫️',
   51: '🌦️', 53: '🌦️', 55: '🌦️',
   61: '🌧️', 63: '🌧️', 65: '🌧️',
+  71: '🌨️', 73: '🌨️', 75: '❄️', 77: '🌨️',
   80: '🌦️', 81: '🌦️', 82: '🌦️',
+  85: '🌨️', 86: '❄️',
   95: '⛈️', 96: '⛈️', 99: '⛈️',
 }
 
@@ -30,6 +32,21 @@ function formatDay(isoString) {
   return d.toLocaleDateString('en-US', { weekday: 'short' })
 }
 
+function getCondition(code) {
+  if (code === 0) return 'Clear sky'
+  if (code === 1) return 'Mainly clear'
+  if (code === 2) return 'Partly cloudy'
+  if (code === 3) return 'Overcast'
+  if (code === 45 || code === 48) return 'Foggy'
+  if (code >= 51 && code <= 55) return 'Drizzle'
+  if (code >= 61 && code <= 65) return 'Rain'
+  if (code >= 71 && code <= 77) return 'Snow'
+  if (code >= 80 && code <= 82) return 'Rain showers'
+  if (code === 85 || code === 86) return 'Snow showers'
+  if (code >= 95 && code <= 99) return 'Thunderstorm'
+  return 'Unknown'
+}
+
 export default function WeatherHome({ onCoordsChange }) {
   const [weather, setWeather] = useState(null)
   const [forecast, setForecast] = useState([])
@@ -44,22 +61,25 @@ export default function WeatherHome({ onCoordsChange }) {
     try {
       const data = await getWeatherByCoords(lat, lon)
       const current = data.current
+      // Handle both 'weather_code' (new) and 'weathercode' (old) field names
+      const currentCode = current.weather_code ?? current.weathercode ?? 0
       setWeather({
         temp: current.temperature_2m,
         feelsLike: current.apparent_temperature,
         humidity: current.relative_humidity_2m,
         windSpeed: current.wind_speed_10m,
-        code: current.weathercode,
-        condition: getCondition(current.weathercode),
+        code: currentCode,
+        condition: getCondition(currentCode),
       })
 
       const daily = data.daily
       if (daily) {
+        const codes = daily.weather_code ?? daily.weathercode ?? []
         const days = daily.time.map((date, i) => ({
           date,
           max: daily.temperature_2m_max[i],
           min: daily.temperature_2m_min[i],
-          code: daily.weathercode[i],
+          code: codes[i] ?? 0,
         }))
         setForecast(days)
       }
@@ -67,17 +87,17 @@ export default function WeatherHome({ onCoordsChange }) {
       const hourlyData = data.hourly
       if (hourlyData) {
         const now = new Date()
-        const currentHour = now.getHours()
+        const hourlyCodes = hourlyData.weather_code ?? hourlyData.weathercode ?? []
         const hours = hourlyData.time
           .map((time, i) => ({
             time,
             temp: hourlyData.temperature_2m[i],
-            code: hourlyData.weathercode[i],
+            code: hourlyCodes[i] ?? 0,
           }))
-          .filter((h) => {
-            const d = new Date(h.time)
-            return d >= now && d.getHours() >= currentHour
-          })
+          // Only keep hours from now onwards. The previous double-condition
+          // `d >= now && d.getHours() >= currentHour` incorrectly dropped
+          // early-morning hours from tomorrow and beyond.
+          .filter((h) => new Date(h.time) >= now)
           .slice(0, 24)
         setHourly(hours)
       }
@@ -90,36 +110,33 @@ export default function WeatherHome({ onCoordsChange }) {
     }
   }
 
-  function getCondition(code) {
-    if (code === 0) return 'Clear sky'
-    if (code <= 3) return 'Partly cloudy'
-    if (code === 45 || code === 48) return 'Foggy'
-    if (code >= 51 && code <= 55) return 'Drizzle'
-    if (code >= 61 && code <= 63) return 'Moderate rain'
-    if (code === 65) return 'Heavy rain'
-    if (code >= 80 && code <= 82) return 'Rain showers'
-    if (code >= 95 && code <= 99) return 'Thunderstorm'
-    return 'Unknown'
-  }
-
   useEffect(() => {
     navigator.geolocation.getCurrentPosition(
       async (pos) => {
         const { latitude: lat, longitude: lon } = pos.coords
         onCoordsChange?.({ lat, lon })
         try {
+          // Use OpenStreetMap Nominatim for reverse geocoding (lat/lon → city
+          // name). The Open-Meteo geocoding API only does forward lookup (city
+          // name → coords) and silently returns no results when lat/lon params
+          // are passed, always falling back to 'Your Location'.
           const res = await fetch(
-            `https://geocoding-api.open-meteo.com/v1/search?latitude=${lat}&longitude=${lon}&count=1`
+            `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`
           )
           const data = await res.json()
-          const name = data.results?.[0]?.name || 'Your Location'
+          const name =
+            data.address?.city ||
+            data.address?.town ||
+            data.address?.village ||
+            data.address?.county ||
+            'Your Location'
           loadWeather(lat, lon, name)
         } catch {
           loadWeather(lat, lon, 'Your Location')
         }
       },
       () => {
-        const fallback = { lat: 28.6139, lon: 77.2090 }
+        const fallback = { lat: 28.6139, lon: 77.209 }
         onCoordsChange?.(fallback)
         loadWeather(fallback.lat, fallback.lon, 'New Delhi')
       }
@@ -132,7 +149,7 @@ export default function WeatherHome({ onCoordsChange }) {
       const result = await geocodeCity(cityInput.trim())
       if (result) {
         onCoordsChange?.({ lat: result.latitude, lon: result.longitude })
-        loadWeather(result.latitude, result.longitude, result.city || cityInput.trim())
+        loadWeather(result.latitude, result.longitude, result.name || cityInput.trim())
         setShowSearch(false)
         setCityInput('')
       }

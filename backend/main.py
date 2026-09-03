@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -30,7 +31,9 @@ class ChatResponse(BaseModel):
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    response = run_weather_agent(request.message, request.location)
+    # run_weather_agent is synchronous (LLM + HTTP calls). Wrapping it with
+    # run_in_threadpool prevents it from blocking FastAPI's async event loop.
+    response = await run_in_threadpool(run_weather_agent, request.message, request.location)
     return ChatResponse(response=response)
 
 

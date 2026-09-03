@@ -2,16 +2,40 @@ import { useState, useRef, useEffect } from 'react'
 import { sendMessage } from '../api'
 import AnimatedContent from '../components/bits/AnimatedContent'
 
-export default function ChatView() {
-  const [messages, setMessages] = useState([])
+export default function ChatView({ messages, setMessages, initialMessage = '', onVoiceProcessed }) {
   const [inputText, setInputText] = useState('')
   const [loading, setLoading] = useState(false)
   const messagesEndRef = useRef(null)
-  const textareaRef = useRef(null)
+  const voiceHandledRef = useRef('')
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
+
+  // When a voice query arrives from VoiceView, auto-send it exactly once.
+  useEffect(() => {
+    if (!initialMessage || initialMessage === voiceHandledRef.current) return
+    voiceHandledRef.current = initialMessage
+
+    const voiceText = initialMessage
+    setMessages((prev) => [...prev, { text: voiceText, isUser: true }])
+    setLoading(true)
+
+    sendMessage(voiceText)
+      .then((response) => {
+        setMessages((prev) => [...prev, { text: response, isUser: false }])
+      })
+      .catch(() => {
+        setMessages((prev) => [
+          ...prev,
+          { text: 'Sorry, I encountered an error. Please try again.', isUser: false },
+        ])
+      })
+      .finally(() => {
+        setLoading(false)
+        onVoiceProcessed?.()
+      })
+  }, [initialMessage, setMessages, onVoiceProcessed])
 
   const handleSend = async () => {
     if (!inputText.trim() || loading) return
@@ -121,7 +145,6 @@ export default function ChatView() {
       {/* Input Bar */}
       <div className="glass border-t border-white/10 px-4 py-3 flex gap-3 items-end flex-shrink-0">
         <textarea
-          ref={textareaRef}
           value={inputText}
           onChange={(e) => setInputText(e.target.value)}
           onKeyDown={handleKeyDown}
