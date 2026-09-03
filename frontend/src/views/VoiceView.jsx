@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion } from 'framer-motion'
-import { sendMessage } from '../api'
 
-export default function VoiceView({ onNavigate }) {
+// onSendVoice(text) — called instead of invoking sendMessage directly here.
+// App.jsx stores the transcript and lets ChatView send it, so the response
+// is properly displayed in the chat thread instead of being silently discarded.
+export default function VoiceView({ onSendVoice }) {
   const [listening, setListening] = useState(false)
   const [transcript, setTranscript] = useState('')
   const [supported, setSupported] = useState(true)
@@ -47,15 +49,13 @@ export default function VoiceView({ onNavigate }) {
     }
   }
 
-  const handleSendToChat = async () => {
+  const handleSendToChat = () => {
     if (!transcript.trim()) return
-    try {
-      await sendMessage(transcript.trim())
-      onNavigate('chat')
-    } catch (err) {
-      console.error(err)
-      onNavigate('chat')
-    }
+    // Hand the transcript to App.jsx which routes it to ChatView for sending.
+    // Previously this called sendMessage() here and discarded the response,
+    // leaving the chat view empty after navigation.
+    onSendVoice?.(transcript.trim())
+    setTranscript('')
   }
 
   if (!supported) {
@@ -68,12 +68,6 @@ export default function VoiceView({ onNavigate }) {
           <p className="text-white/50 text-sm mb-6">
             Please type your query in the Chat tab instead.
           </p>
-          <button
-            onClick={() => onNavigate('chat')}
-            className="bg-accent rounded-xl px-6 py-3 text-white font-medium"
-          >
-            Go to Chat
-          </button>
         </div>
       </div>
     )

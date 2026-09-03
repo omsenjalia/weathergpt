@@ -30,6 +30,22 @@ def should_continue(state: AgentState):
     return END
 
 
+# Compile the graph once at module load time rather than rebuilding it on
+# every request. Compilation is expensive and the graph structure never
+# changes between calls.
+def _build_graph():
+    graph = StateGraph(AgentState)
+    graph.add_node("agent", agent_node)
+    graph.add_node("tools", ToolNode(TOOLS))
+    graph.set_entry_point("agent")
+    graph.add_conditional_edges("agent", should_continue, {"tools": "tools", END: END})
+    graph.add_edge("tools", "agent")
+    return graph.compile()
+
+
+_app = _build_graph()
+
+
 def run_weather_agent(user_message: str, user_location: str = "") -> str:
     language = get_user_language(user_message)
 
@@ -48,14 +64,5 @@ IMPORTANT RULES:
 """
 
     messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_message)]
-
-    graph = StateGraph(AgentState)
-    graph.add_node("agent", agent_node)
-    graph.add_node("tools", ToolNode(TOOLS))
-    graph.set_entry_point("agent")
-    graph.add_conditional_edges("agent", should_continue, {"tools": "tools", END: END})
-    graph.add_edge("tools", "agent")
-
-    app = graph.compile()
-    result = app.invoke({"messages": messages})
+    result = _app.invoke({"messages": messages})
     return result["messages"][-1].content

@@ -13,10 +13,28 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [coords, setCoords] = useState({ lat: 20.5937, lon: 78.9629 })
 
+  // Lifted state: keeps Chat history alive across view switches.
+  const [chatMessages, setChatMessages] = useState([])
+  // Set by VoiceView; ChatView auto-sends this then clears it.
+  const [voiceQuery, setVoiceQuery] = useState('')
+
+  // Called by VoiceView when the user taps "Send to Chat".
+  const handleVoiceSend = (text) => {
+    setVoiceQuery(text)
+    setActiveView('chat')
+  }
+
   const views = {
     home: <WeatherHome onCoordsChange={setCoords} />,
-    chat: <ChatView />,
-    voice: <VoiceView onNavigate={setActiveView} />,
+    chat: (
+      <ChatView
+        messages={chatMessages}
+        setMessages={setChatMessages}
+        initialMessage={voiceQuery}
+        onVoiceProcessed={() => setVoiceQuery('')}
+      />
+    ),
+    voice: <VoiceView onSendVoice={handleVoiceSend} />,
     map: <MapView lat={coords.lat} lon={coords.lon} />,
   }
 
@@ -55,7 +73,7 @@ export default function App() {
       {/* Bottom Dock — mobile only */}
       <BottomDock activeView={activeView} onNavigate={setActiveView} />
 
-      {/* Hamburger trigger for sidebar — desktop only */}
+      {/* Hamburger trigger for sidebar — desktop only, shown only when sidebar is closed */}
       {!sidebarOpen && (
         <button
           onClick={() => setSidebarOpen(true)}

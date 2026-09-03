@@ -10,19 +10,21 @@ const navItems = [
 export default function Sidebar({ activeView, onNavigate, open, onClose }) {
   return (
     <>
-      {/* Hamburger Button — desktop only */}
-      <button
-        onClick={() => (open ? onClose() : null)}
-        className={`fixed top-6 left-6 z-50 glass w-10 h-10 rounded-xl items-center justify-center cursor-pointer transition-all ${
-          open ? 'md:flex hidden' : 'md:flex hidden'
-        }`}
-      >
-        {open ? (
+      {/*
+        Close button — only rendered while the sidebar is open.
+        The open button lives in App.jsx and renders when the sidebar is closed.
+        Previously both were rendered simultaneously at the same position
+        (fixed top-6 left-6), and the sidebar's button had a dead `null` branch
+        when open===false plus a ternary that always returned the same class.
+      */}
+      {open && (
+        <button
+          onClick={onClose}
+          className="fixed top-6 left-6 z-50 glass w-10 h-10 rounded-xl items-center justify-center cursor-pointer hidden md:flex"
+        >
           <span className="text-white text-lg">✕</span>
-        ) : (
-          <span className="text-white text-lg">☰</span>
-        )}
-      </button>
+        </button>
+      )}
 
       {/* Backdrop */}
       <AnimatePresence>
