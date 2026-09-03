@@ -264,12 +264,31 @@ export default function ChatView({ messages, setMessages, initialMessage = '', o
     }
   }
 
-  const examples = [
+  const ALL_EXAMPLES_POOL = [
     { title: 'Mumbai Weather Today', text: 'What is the weather in Mumbai today?' },
     { title: 'Rain Prediction', text: 'Will it rain in Ahmedabad this week?' },
     { title: 'दिल्ली में मौसम (Hindi)', text: 'आज दिल्ली में मौसम कैसा है?' },
     { title: 'Travel Advice', text: 'Should I pack warm clothes for Shimla tomorrow?' },
+    { title: 'Air Quality (AQI)', text: 'How is the air quality and PM2.5 in Delhi right now?' },
+    { title: 'UV & Heat Advisory', text: 'Is it safe to go out in the afternoon in Jaipur?' },
+    { title: 'Weekend Beach Trip', text: 'Will Goa have clear skies this coming weekend?' },
+    { title: 'સુરત હવામાન (Gujarati)', text: 'આજે સુરતમાં વરસાદ પડશે કે નહિ?' },
+    { title: 'Monsoon Alert', text: 'Are there any heavy rainfall alerts for Kerala?' },
+    { title: 'Hill Station Packing', text: 'What is the temperature in Manali right now?' },
+    { title: 'Chennai Humidity', text: 'Why is it so humid in Chennai today?' },
+    { title: 'பெங்களூரு வானிலை (Tamil)', text: 'இன்று பெங்களூரில் மழை பெய்யுமா?' },
+    { title: 'Agricultural Weather', text: 'Is weather favorable for wheat crops in Punjab?' },
+    { title: 'Outdoor Sports Viability', text: 'Can we play cricket outdoors in Bangalore this evening?' },
+    { title: 'Kolkata Thunderstorm', text: 'Is a thunderstorm expected in Kolkata today?' },
+    { title: 'Hyderabad Wind Speed', text: 'How windy is it in Hyderabad right now?' },
   ]
+
+  const [randomExamples, setRandomExamples] = useState([])
+
+  useEffect(() => {
+    const shuffled = [...ALL_EXAMPLES_POOL].sort(() => 0.5 - Math.random())
+    setRandomExamples(shuffled.slice(0, 4))
+  }, [])
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden">
@@ -288,7 +307,7 @@ export default function ChatView({ messages, setMessages, initialMessage = '', o
             </p>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full">
-              {examples.map((ex, i) => (
+              {randomExamples.map((ex, i) => (
                 <button
                   key={i}
                   onClick={() => handleSend(ex.text)}

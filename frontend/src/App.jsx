@@ -3,7 +3,6 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { MapPin, ChevronDown, Languages, Menu, X, Sun, MessageSquare, Map } from 'lucide-react'
 import Aurora from './components/bits/Aurora'
 import Sidebar from './components/Sidebar'
-import BottomDock from './components/BottomDock'
 import LocationPickerModal from './components/LocationPickerModal'
 import LanguagePickerModal, { INDIAN_LANGUAGES } from './components/LanguagePickerModal'
 import WeatherHome from './views/WeatherHome'
@@ -224,13 +223,6 @@ export default function App() {
           </motion.div>
         </AnimatePresence>
       </div>
-
-      {/* Bottom Dock — mobile screen only, hidden in chat view so chat input is fully accessible */}
-      {activeView !== 'chat' && !isMobileMenuOpen && (
-        <div className="md:hidden">
-          <BottomDock activeView={activeView} onNavigate={setActiveView} />
-        </div>
-      )}
 
       {/* Modals */}
       <LocationPickerModal
