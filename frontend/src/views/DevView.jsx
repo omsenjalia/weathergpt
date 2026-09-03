@@ -180,8 +180,8 @@ export default function DevView({ location, language }) {
               <span className="text-2xl font-bold font-display text-white">
                 {devData?.status === 'ok' ? 'ONLINE' : error ? 'OFFLINE' : 'CHECKING...'}
               </span>
-              <p className="text-[11px] text-white/50 truncate mt-1">
-                Port: 8888 | Endpoint: /dev
+              <p className="text-[11px] text-white/50 truncate mt-1 font-mono">
+                API: {import.meta.env.VITE_API_URL || 'http://localhost:8888'}
               </p>
             </div>
           </div>
