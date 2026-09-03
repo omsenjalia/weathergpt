@@ -327,7 +327,9 @@ export default function DevView({ location, language }) {
             </div>
             <div className="my-1">
               <span className="text-2xl font-bold font-display text-white">
-                {devData?.system?.memory_usage_mb != null ? `${devData.system.memory_usage_mb} MB` : '--'}
+                {devData?.system?.memory_usage_mb && devData.system.memory_usage_mb !== 'N/A'
+                  ? `${devData.system.memory_usage_mb} MB`
+                  : 'Serverless'}
               </span>
               <p className="text-[11px] text-white/50 truncate mt-1">
                 PID: {devData?.system?.process_pid || '--'} | OS: {devData?.system?.platform?.split('-')[0] || 'Linux'}
@@ -353,8 +355,8 @@ export default function DevView({ location, language }) {
           </div>
         </div>
 
-        {/* Tab Switcher */}
-        <div className="flex items-center gap-2 border-b border-white/10 pb-3 overflow-x-auto no-scrollbar">
+        {/* Tab Switcher — Sticky Navigation Bar */}
+        <div className="sticky top-0 z-30 bg-[#0a0814]/95 backdrop-blur-xl py-3 border-b border-white/10 flex items-center gap-2 overflow-x-auto no-scrollbar">
           {[
             { id: 'overview', label: 'Overview & Telemetry', icon: Activity },
             { id: 'pipeline', label: 'Data Pipeline & Raw JSON Model', icon: GitMerge },
