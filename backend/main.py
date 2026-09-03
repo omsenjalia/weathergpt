@@ -51,13 +51,20 @@ async def log_requests(request: Request, call_next):
     try:
         response = await call_next(request)
         duration_ms = round((time.time() - start) * 1000, 2)
-        if request.url.path not in ["/health", "/dev"]:
+        if request.url.path not in ["/health", "/dev", "/health/", "/dev/"]:
             log_event("INFO", f"HTTP {request.method} {request.url.path} -> {response.status_code}", {"duration_ms": duration_ms})
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Methods"] = "*"
+        response.headers["Access-Control-Allow-Headers"] = "*"
         return response
     except Exception as exc:
         duration_ms = round((time.time() - start) * 1000, 2)
         log_event("ERROR", f"HTTP {request.method} {request.url.path} failed: {str(exc)}", {"duration_ms": duration_ms, "error": str(exc)})
-        return JSONResponse(status_code=500, content={"error": str(exc)})
+        res = JSONResponse(status_code=500, content={"error": str(exc)})
+        res.headers["Access-Control-Allow-Origin"] = "*"
+        res.headers["Access-Control-Allow-Methods"] = "*"
+        res.headers["Access-Control-Allow-Headers"] = "*"
+        return res
 
 
 class ChatMessage(BaseModel):
@@ -106,6 +113,30 @@ async def dev_diagnostics():
             mem_mb, cpu_pct = "N/A", "N/A"
     else:
         mem_mb, cpu_pct = "N/A", "N/A"
+
+    endpoints = []
+    try:
+        for route in app.routes:
+            if hasattr(route, "path"):
+                methods = getattr(route, "methods", None)
+                m_str = ",".join(methods) if methods else "GET"
+                endpoints.append(f"{route.path} [{m_str}]")
+    except Exception:
+        endpoints = ["/chat", "/health", "/dev"]
+
+    ai_tools = []
+    try:
+        ai_tools = [getattr(tool, "name", str(tool)) for tool in TOOLS]
+    except Exception:
+        ai_tools = ["geocode_city", "get_current_weather", "get_weather_forecast"]
+
+    keys_status = {
+        "groq_api_key": bool(os.getenv("GROQ_API_KEY")),
+        "weatherapi_key": bool(os.getenv("WEATHERAPI_KEY") or os.getenv("VITE_WEATHERAPI_KEY")),
+        "tomorrow_key": bool(os.getenv("TOMORROW_KEY") or os.getenv("VITE_TOMORROW_KEY")),
+        "openweather_key": bool(os.getenv("OPENWEATHER_KEY") or os.getenv("VITE_OPENWEATHER_KEY")),
+        "accuweather_key": bool(os.getenv("ACCUWEATHER_KEY") or os.getenv("VITE_ACCUWEATHER_KEY")),
+    }
 
     return {
         "status": "ok",
