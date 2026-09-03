@@ -9,6 +9,7 @@ import WeatherHome from './views/WeatherHome'
 import ChatView from './views/ChatView'
 import MapView from './views/MapView'
 import DevView from './views/DevView'
+import { autoDetectUserLocation } from './utils/location'
 
 const DEFAULT_LOCATION = {
   name: 'New Delhi',
@@ -51,17 +52,9 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
 
-  // Load saved location & language on mount
+  // Load saved location & language on mount, or auto-detect location
   useEffect(() => {
     try {
-      const savedLoc = localStorage.getItem('weathergpt_location')
-      if (savedLoc) {
-        const parsed = JSON.parse(savedLoc)
-        if (parsed?.lat && parsed?.lon && parsed?.name) {
-          setLocation(parsed)
-        }
-      }
-
       const savedLang = localStorage.getItem('weathergpt_language')
       if (savedLang) {
         const parsedLang = JSON.parse(savedLang)
@@ -73,35 +66,12 @@ export default function App() {
       // Ignore parse errors
     }
 
-    // Fallback: try GPS detection once
-    if (navigator.geolocation && !localStorage.getItem('weathergpt_location')) {
-      navigator.geolocation.getCurrentPosition(
-        async (pos) => {
-          const { latitude: lat, longitude: lon } = pos.coords
-          try {
-            const res = await fetch(
-              `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`
-            )
-            const data = await res.json()
-            const name =
-              data.address?.city ||
-              data.address?.town ||
-              data.address?.village ||
-              data.address?.county ||
-              'My Location'
-            const country = data.address?.country || 'India'
-            const newLoc = { name, country, lat, lon }
-            setLocation(newLoc)
-            localStorage.setItem('weathergpt_location', JSON.stringify(newLoc))
-          } catch {
-            const fallback = { name: 'My Location', country: 'India', lat, lon }
-            setLocation(fallback)
-          }
-        },
-        () => {},
-        { timeout: 5000 }
-      )
-    }
+    // Auto-detect user location via GPS or IP fallback
+    autoDetectUserLocation().then((detectedLoc) => {
+      if (detectedLoc) {
+        setLocation(detectedLoc)
+      }
+    })
   }, [])
 
   const handleSelectLocation = (newLoc) => {

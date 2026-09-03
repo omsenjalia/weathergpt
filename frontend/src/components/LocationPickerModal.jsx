@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { MapPin, Search, Navigation, X, Check, Loader2 } from 'lucide-react'
 import axios from 'axios'
+import { reverseGeocode, detectLocationFromIP } from '../utils/location'
 
 const POPULAR_CITIES = [
   { name: 'Mumbai', country: 'India', lat: 19.076, lon: 72.8777 },
@@ -62,34 +63,24 @@ export default function LocationPickerModal({ isOpen, onClose, onSelectLocation,
 
   const handleDetectGps = () => {
     setDetectingGps(true)
+    if (!navigator.geolocation) {
+      detectLocationFromIP().then((ipLoc) => {
+        setDetectingGps(false)
+        if (ipLoc) {
+          handleSelect(ipLoc)
+        } else {
+          alert('Could not detect location automatically. Please pick or search your city manually.')
+        }
+      })
+      return
+    }
+
     navigator.geolocation.getCurrentPosition(
       async (pos) => {
         const { latitude: lat, longitude: lon } = pos.coords
         try {
-          const res = await fetch(
-            `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`
-          )
-          const data = await res.json()
-          const address = data.address || {}
-          const subLocality =
-            address.suburb ||
-            address.neighbourhood ||
-            address.residential ||
-            address.district ||
-            address.city_district ||
-            ''
-          const mainCity =
-            address.city ||
-            address.town ||
-            address.village ||
-            address.county ||
-            'My Location'
-          const name =
-            subLocality && subLocality.toLowerCase() !== mainCity.toLowerCase()
-              ? `${subLocality}, ${mainCity}`
-              : mainCity
-          const country = address.country || 'India'
-          handleSelect({ name, country, lat, lon })
+          const loc = await reverseGeocode(lat, lon)
+          handleSelect(loc)
         } catch {
           handleSelect({ name: 'My Location', country: 'India', lat, lon })
         } finally {
@@ -97,18 +88,11 @@ export default function LocationPickerModal({ isOpen, onClose, onSelectLocation,
         }
       },
       async (err) => {
-        console.warn('GPS failed, attempting IP reverse geocoding fallback...', err)
+        console.warn('GPS failed, attempting IP location fallback...', err)
         try {
-          const ipRes = await fetch('https://ipapi.co/json/')
-          const ipData = await ipRes.json()
-          if (ipData.latitude && ipData.longitude) {
-            const ipName = ipData.city ? `${ipData.city}` : 'My Location'
-            handleSelect({
-              name: ipName,
-              country: ipData.country_name || 'India',
-              lat: ipData.latitude,
-              lon: ipData.longitude,
-            })
+          const ipLoc = await detectLocationFromIP()
+          if (ipLoc) {
+            handleSelect(ipLoc)
             return
           }
         } catch (ipErr) {
@@ -118,7 +102,7 @@ export default function LocationPickerModal({ isOpen, onClose, onSelectLocation,
         }
         alert('Could not detect location automatically. Please pick or search your city manually.')
       },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+      { enableHighAccuracy: false, timeout: 15000, maximumAge: 300000 }
     )
   }
 
