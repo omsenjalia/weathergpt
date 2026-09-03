@@ -1,10 +1,9 @@
-import { Sun, MessageSquare, Mic, Map } from 'lucide-react'
+import { Sun, MessageSquare, Map } from 'lucide-react'
 import Dock from './bits/Dock'
 
 const items = [
   { id: 'home', icon: Sun, label: 'Weather' },
   { id: 'chat', icon: MessageSquare, label: 'Chat' },
-  { id: 'voice', icon: Mic, label: 'Voice' },
   { id: 'map', icon: Map, label: 'Map' },
 ]
 

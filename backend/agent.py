@@ -1,8 +1,11 @@
 import os
 import operator
 from typing import Annotated, Sequence, TypedDict
+from dotenv import load_dotenv
 
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+load_dotenv()
+
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_groq import ChatGroq
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
@@ -55,24 +58,62 @@ def _build_graph():
 _app = _build_graph()
 
 
-def run_weather_agent(user_message: str, user_location: str = "") -> str:
-    language = get_user_language(user_message)
+def run_weather_agent(
+    messages_input: list[dict] | str, user_location: str = "", user_language: str = ""
+) -> str:
+    if isinstance(messages_input, str):
+        history = [{"role": "user", "content": messages_input}]
+    else:
+        history = messages_input or []
 
-    system_prompt = f"""You are WeatherGPT, an AI weather assistant specializing in weather across India.
+    # If user_language passed explicitly, use it; otherwise detect from text
+    if user_language and user_language.strip():
+        language = user_language.strip()
+    else:
+        last_user_msg = next(
+            (m.get("content", "") for m in reversed(history) if m.get("role") == "user"), ""
+        )
+        language = get_user_language(last_user_msg) if last_user_msg else "English"
 
-IMPORTANT RULES:
-1. Always call geocode_city FIRST to get coordinates before calling any weather tool.
-2. Respond in {language} language. Match the user's language exactly (English or any Indian language). Preserve the native script (Devanagari, Tamil, Telugu, Bengali, etc.).
-3. Format your response using Markdown: use **bold** for key values, bullet lists and tables for multiple data points, and ## headings for sections. This makes it render nicely in the chat UI.
-4. Always include safety advisories for severe weather (thunderstorms, heavy rain, extreme heat).
-5. Provide practical advice like carrying an umbrella, staying hydrated, etc.
-6. Be conversational and friendly.
-7. Format temperatures clearly with units.
-8. If a city is not found, ask the user to clarify or suggest nearby cities.
+    system_prompt = f"""You are WeatherGPT, a highly intelligent, friendly, and helpful AI weather assistant designed to give a seamless experience like Google Gemini.
+
+PERSONALITY & BEHAVIOR:
+- Warm, conversational, clear, and proactive — like chatting with Gemini.
+- Maintain full context across the entire conversation history (e.g. remember city names, locations, dates, or travel plans discussed earlier in the chat).
+- Provide practical advice (clothing suggestions, umbrella reminders, UV & heat guidance, outdoor activity viability) and safety advisories for severe weather conditions.
+
+FORMATTING & RICH WIDGET RULES:
+1. Always format responses with clean Markdown: use **bold** key metrics, bullet points, clean tables, and ## headings.
+2. Target Language: {language}. You MUST respond natively in {language} using its official native script (e.g. Devanagari for Hindi/Marathi, Gujarati script, Tamil, Telugu, Bengali, Kannada, Malayalam, Punjabi). Keep JSON widget values in English/numbers so the UI can parse them cleanly.
+3. If weather coordinates are needed for a location, use `geocode_city` FIRST to get coordinates before invoking `get_current_weather` or `get_weather_forecast`.
+4. RICH WIDGET EMBEDDING: Whenever providing weather for a city or a forecast, ALWAYS include a JSON widget codeblock so the chat UI displays a rich interactive visual card.
+   Example current weather widget:
+   ```widget:weather
+   {{"city": "CityName", "temp": 30, "feelsLike": 34, "condition": "Clear Sky", "humidity": 65, "windSpeed": 12, "advisory": "Pleasant outdoor weather"}}
+   ```
+   Example forecast widget:
+   ```widget:forecast
+   {{"city": "CityName", "days": [{{"day": "Today", "temp": 30, "condition": "Clear", "rainProb": 10}}, {{"day": "Tomorrow", "temp": 28, "condition": "Rain", "rainProb": 80}}]}}
+   ```
+   Example official IMD alert widget:
+   ```widget:alert
+   {{"city": "CityName", "level": "ORANGE", "title": "IMD ORANGE ALERT: Heavy Rain Expected", "advisory": "Localized waterlogging likely in low-lying areas.", "action": "BE PREPARED: Keep rainwear handy"}}
+   ```
+5. Be engaging, clear, and direct.
 
 {f'User location context: {user_location}' if user_location else ''}
 """
 
-    messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_message)]
-    result = _app.invoke({"messages": messages})
+    formatted_messages = [SystemMessage(content=system_prompt)]
+    for msg in history:
+        role = msg.get("role")
+        content = msg.get("content", "")
+        if not content:
+            continue
+        if role == "user":
+            formatted_messages.append(HumanMessage(content=content))
+        elif role == "assistant":
+            formatted_messages.append(AIMessage(content=content))
+
+    result = _app.invoke({"messages": formatted_messages})
     return result["messages"][-1].content

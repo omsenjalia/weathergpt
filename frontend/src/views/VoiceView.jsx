@@ -5,12 +5,13 @@ import { Mic, MicOff, Languages, Send, RotateCcw } from 'lucide-react'
 // onSendVoice(text) — called instead of invoking sendMessage directly here.
 // App.jsx stores the transcript and lets ChatView send it, so the response
 // is properly displayed in the chat thread instead of being silently discarded.
-export default function VoiceView({ onSendVoice }) {
+export default function VoiceView({ onSendVoice, language }) {
   const [listening, setListening] = useState(false)
   const [transcript, setTranscript] = useState('')
   const [supported, setSupported] = useState(true)
-  const [lang, setLang] = useState('en-IN')
   const recognitionRef = useRef(null)
+
+  const activeLangCode = language?.speechCode || 'en-IN'
 
   const isSecure =
     window.location.protocol === 'https:' ||
@@ -25,7 +26,7 @@ export default function VoiceView({ onSendVoice }) {
     }
 
     const recognition = new SpeechRecognition()
-    recognition.lang = lang
+    recognition.lang = activeLangCode
     recognition.continuous = false
     recognition.interimResults = true
 
@@ -40,7 +41,7 @@ export default function VoiceView({ onSendVoice }) {
     recognition.onerror = () => setListening(false)
 
     recognitionRef.current = recognition
-  }, [lang])
+  }, [activeLangCode])
 
   const toggleListening = () => {
     if (!recognitionRef.current) return
@@ -77,7 +78,7 @@ export default function VoiceView({ onSendVoice }) {
   }
 
   return (
-    <div className="flex-1 flex flex-col items-center justify-center gap-6 sm:gap-8 px-6 pb-24">
+    <div className="flex-1 flex flex-col items-center justify-center gap-6 sm:gap-8 p-6 pb-24 md:pb-6 overflow-y-auto no-scrollbar">
       {/* Title */}
       <div className="text-center">
         <h1 className="text-white text-xl sm:text-2xl font-display font-bold mb-2">Voice Assistant</h1>

@@ -20,9 +20,16 @@ app.add_middleware(
 )
 
 
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+
 class ChatRequest(BaseModel):
-    message: str
+    message: str = ""
+    messages: list[dict] = []
     location: str = ""
+    language: str = "English"
 
 
 class ChatResponse(BaseModel):
@@ -31,9 +38,11 @@ class ChatResponse(BaseModel):
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    # run_weather_agent is synchronous (LLM + HTTP calls). Wrapping it with
-    # run_in_threadpool prevents it from blocking FastAPI's async event loop.
-    response = await run_in_threadpool(run_weather_agent, request.message, request.location)
+    # Pass messages list if provided, otherwise fallback to message string
+    payload = request.messages if request.messages else request.message
+    response = await run_in_threadpool(
+        run_weather_agent, payload, request.location, request.language
+    )
     return ChatResponse(response=response)
 
 

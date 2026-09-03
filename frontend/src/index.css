@@ -53,10 +53,10 @@ h1, h2, .font-display {
 .safe-x { padding-left: calc(env(safe-area-inset-left, 0px)); padding-right: calc(env(safe-area-inset-right, 0px)); }
 
 
-.text-fluid-xl { font-size: clamp(1.5rem, 4vw, 3rem); }
-.text-fluid-2xl { font-size: clamp(2rem, 5vw, 4rem); }
-.text-fluid-3xl { font-size: clamp(3rem, 8vw, 6rem); }
-.text-fluid-4xl { font-size: clamp(4rem, 10vw, 8rem); }
+.text-fluid-xl { font-size: clamp(1.25rem, 2.5vw, 1.875rem); }
+.text-fluid-2xl { font-size: clamp(1.5rem, 3.5vw, 2.5rem); }
+.text-fluid-3xl { font-size: clamp(2rem, 4vw, 3.5rem); }
+.text-fluid-4xl { font-size: clamp(2.5rem, 5vw, 4.5rem); }
 
 
 .touch-target { min-height: 44px; min-width: 44px; }

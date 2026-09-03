@@ -1,76 +1,104 @@
-import { motion, AnimatePresence } from 'framer-motion'
-import { Sun, MessageSquare, Mic, Map, X } from 'lucide-react'
+import { Sun, MessageSquare, Map, MapPin, Languages } from 'lucide-react'
+import { Translations } from '../utils/translations'
 
 const navItems = [
-  { id: 'home', icon: Sun, label: 'Weather' },
-  { id: 'chat', icon: MessageSquare, label: 'Chat' },
-  { id: 'voice', icon: Mic, label: 'Voice' },
-  { id: 'map', icon: Map, label: 'Map' },
+  { id: 'home', icon: Sun, translationKey: 'navWeather' },
+  { id: 'chat', icon: MessageSquare, translationKey: 'navChat' },
+  { id: 'map', icon: Map, translationKey: 'navMap' },
 ]
 
-export default function Sidebar({ activeView, onNavigate, open, onClose }) {
+export default function Sidebar({
+  activeView,
+  onNavigate,
+  location,
+  onOpenLocationPicker,
+  language,
+  onOpenLanguagePicker,
+}) {
+  const langCode = language?.code || 'en'
+
   return (
-    <>
-      {open && (
-        <button
-          onClick={onClose}
-          aria-label="Close menu"
-          className="fixed top-6 left-6 z-50 glass w-11 h-11 rounded-xl items-center justify-center cursor-pointer hidden md:flex touch-target"
-        >
-          <X className="text-white" size={22} />
-        </button>
-      )}
-
-      {/* Backdrop */}
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/40 backdrop-blur-sm z-30 hidden md:block"
-            onClick={onClose}
-          />
-        )}
-      </AnimatePresence>
-
-      {/* Sidebar Panel */}
-      <motion.div
-        initial={{ x: -264 }}
-        animate={{ x: open ? 0 : -264 }}
-        transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-        className="fixed left-0 top-0 bottom-0 w-72 z-40 glass border-r border-white/10 hidden md:flex flex-col pt-20 px-4"
-      >
-        {/* Logo */}
-        <div className="mb-8 px-4">
-          <span className="inline-flex">
-            <Sun className="text-accent" size={32} />
-          </span>
-          <h1 className="text-white text-xl font-display font-bold mt-2">WeatherGPT</h1>
-          <p className="text-white/40 text-xs mt-1">AI Weather Assistant</p>
+    <aside className="w-64 lg:w-72 glass border-r border-white/10 hidden md:flex flex-col justify-between p-6 flex-shrink-0 z-30 h-full">
+      <div className="flex flex-col gap-8">
+        {/* Brand */}
+        <div className="flex items-center gap-3 px-2">
+          <div className="w-10 h-10 rounded-2xl bg-accent/20 border border-accent/40 flex items-center justify-center shadow-lg">
+            <Sun className="text-accent" size={24} />
+          </div>
+          <div>
+            <h1 className="text-white text-xl font-display font-bold tracking-tight">WeatherGPT</h1>
+            <p className="text-white/40 text-xs font-medium">Multilingual Weather Agent</p>
+          </div>
         </div>
 
-        {/* Nav Items */}
-        <div className="flex flex-col gap-2">
+        {/* Navigation */}
+        <nav className="flex flex-col gap-2">
           {navItems.map((item) => {
             const Icon = item.icon
+            const isActive = activeView === item.id
+            const label = Translations.get(langCode, item.translationKey)
             return (
               <button
                 key={item.id}
                 onClick={() => onNavigate(item.id)}
-                className={`flex items-center gap-3 px-4 py-3 rounded-2xl cursor-pointer transition-all touch-target ${
-                  activeView === item.id
-                    ? 'bg-accent/20 text-white border border-accent/30'
-                    : 'text-white/70 hover:text-white hover:bg-white/10'
+                className={`flex items-center gap-3.5 px-4 py-3 rounded-2xl cursor-pointer transition-all duration-200 ${
+                  isActive
+                    ? 'bg-accent/25 text-white border border-accent/40 shadow-md font-semibold'
+                    : 'text-white/60 hover:text-white hover:bg-white/10 font-medium'
                 }`}
               >
-                <Icon className={activeView === item.id ? 'text-accent' : ''} size={20} />
-                <span className="text-sm font-medium">{item.label}</span>
+                <Icon className={isActive ? 'text-accent' : 'text-white/50'} size={20} />
+                <span className="text-sm">{label}</span>
               </button>
             )
           })}
+        </nav>
+      </div>
+
+      {/* Location & Language Controls */}
+      <div className="flex flex-col gap-2.5">
+        {location && (
+          <button
+            onClick={onOpenLocationPicker}
+            className="glass rounded-2xl p-3 border border-white/10 flex items-center justify-between text-left hover:bg-white/10 transition-all cursor-pointer"
+          >
+            <div className="flex items-center gap-2">
+              <MapPin size={16} className="text-accent flex-shrink-0" />
+              <div>
+                <p className="text-white text-xs font-bold truncate max-w-[130px]">{location.name}</p>
+                <p className="text-white/40 text-[10px] truncate max-w-[130px]">{location.country || 'Active City'}</p>
+              </div>
+            </div>
+            <span className="text-[10px] text-accent font-semibold underline">{Translations.get(langCode, 'change')}</span>
+          </button>
+        )}
+
+        {language && (
+          <button
+            onClick={onOpenLanguagePicker}
+            className="glass rounded-2xl p-3 border border-white/10 flex items-center justify-between text-left hover:bg-white/10 transition-all cursor-pointer"
+          >
+            <div className="flex items-center gap-2">
+              <Languages size={16} className="text-accent flex-shrink-0" />
+              <div>
+                <p className="text-white text-xs font-bold truncate max-w-[130px]">{language.native}</p>
+                <p className="text-white/40 text-[10px] truncate max-w-[130px]">{language.name}</p>
+              </div>
+            </div>
+            <span className="text-[10px] text-accent font-semibold underline">{Translations.get(langCode, 'change')}</span>
+          </button>
+        )}
+
+        <div className="glass rounded-2xl p-3 border border-white/10">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-accent text-[10px] font-semibold uppercase tracking-wider">Multilingual AI</span>
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+          </div>
+          <p className="text-white/50 text-[11px] leading-relaxed">
+            10 Indian Languages Supported
+          </p>
         </div>
-      </motion.div>
-    </>
+      </div>
+    </aside>
   )
 }
