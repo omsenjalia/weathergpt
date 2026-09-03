@@ -13,7 +13,7 @@ A premium dark glassmorphism weather assistant for India featuring conversationa
 
 - **Multi-Source Ensemble Weather Engine** — Fuses telemetry in real-time across top meteorological providers (**Open-Meteo ECMWF/GFS**, **WeatherAPI.com**, **Tomorrow.io**, **OpenWeatherMap**, **AccuWeather**) for unmatched precision.
 - **Zero-Config Out-of-the-Box** — Works instantly using free high-precision physics models (ECMWF, ICON, GFS) with zero API keys required.
-- **In-App & `.env` Key Manager** — Add optional provider keys via `.env` OR directly inside a sleek in-app **API Settings Modal** stored in browser `localStorage`.
+- **Simple Key Configuration** — Configure optional provider keys easily via environment variables (`.env`).
 - **Conversational AI Weather** — Ask about weather in any Indian city in English, Hindi, Gujarati, Tamil, Bengali, Telugu, Marathi, Kannada, Malayalam, Punjabi, etc.
 - **Fully Accessible Mobile UX** — Header hamburger navigation drawer + floating bottom dock (auto-hides on Chat view for unobstructed chat input).
 - **Official IMD Hazard Advisories** — Evaluates live weather telemetry against India Meteorological Department (IMD) Red, Orange, and Yellow alert criteria.
@@ -68,8 +68,6 @@ VITE_ACCUWEATHER_KEY=your_accuweather_key
 # Optional Map Key
 VITE_WINDY_API_KEY=your_windy_key
 ```
-
-> 💡 **Tip**: You don't have to edit `.env` files if you don't want to! Simply click the **API Keys** button in the WeatherGPT UI header/sidebar to enter keys directly into the app settings modal.
 
 ---
 

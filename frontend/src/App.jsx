@@ -1,12 +1,11 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { MapPin, ChevronDown, Languages, Menu, X, Sun, MessageSquare, Map, Key } from 'lucide-react'
+import { MapPin, ChevronDown, Languages, Menu, X, Sun, MessageSquare, Map } from 'lucide-react'
 import Aurora from './components/bits/Aurora'
 import Sidebar from './components/Sidebar'
 import BottomDock from './components/BottomDock'
 import LocationPickerModal from './components/LocationPickerModal'
 import LanguagePickerModal, { INDIAN_LANGUAGES } from './components/LanguagePickerModal'
-import ApiSettingsModal from './components/ApiSettingsModal'
 import WeatherHome from './views/WeatherHome'
 import ChatView from './views/ChatView'
 import MapView from './views/MapView'
@@ -31,7 +30,6 @@ export default function App() {
   const [isLocationModalOpen, setIsLocationModalOpen] = useState(false)
   const [isLanguageModalOpen, setIsLanguageModalOpen] = useState(false)
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
-  const [isApiSettingsOpen, setIsApiSettingsOpen] = useState(false)
 
   // Lifted state: keeps Chat history alive across view switches.
   const [chatMessages, setChatMessages] = useState([])
@@ -139,7 +137,6 @@ export default function App() {
         onOpenLocationPicker={() => setIsLocationModalOpen(true)}
         language={language}
         onOpenLanguagePicker={() => setIsLanguageModalOpen(true)}
-        onOpenApiSettings={() => setIsApiSettingsOpen(true)}
       />
 
       {/* Main Content Area */}
@@ -167,15 +164,6 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => setIsApiSettingsOpen(true)}
-              className="glass hover:bg-white/15 px-2.5 py-1.5 rounded-2xl text-white text-xs md:text-sm font-semibold flex items-center gap-1.5 border border-white/15 cursor-pointer transition-all shadow-sm"
-              title="Weather API Settings"
-            >
-              <Key size={14} className="text-accent" />
-              <span className="hidden sm:inline">API Keys</span>
-            </button>
-
             <button
               onClick={() => setIsLanguageModalOpen(true)}
               className="glass hover:bg-white/15 px-3 py-1.5 rounded-2xl text-white text-xs md:text-sm font-semibold flex items-center gap-1.5 border border-white/15 cursor-pointer transition-all shadow-sm"
@@ -257,11 +245,6 @@ export default function App() {
         onClose={() => setIsLanguageModalOpen(false)}
         onSelectLanguage={handleSelectLanguage}
         currentLanguage={language}
-      />
-
-      <ApiSettingsModal
-        isOpen={isApiSettingsOpen}
-        onClose={() => setIsApiSettingsOpen(false)}
       />
     </div>
   )
