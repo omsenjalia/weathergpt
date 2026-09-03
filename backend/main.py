@@ -93,6 +93,48 @@ async def chat(request: ChatRequest):
     return ChatResponse(response=response)
 
 
+class SandboxRequest(BaseModel):
+    prompt: str
+    location: str = "New Delhi"
+    language: str = "English"
+
+
+@app.post("/dev/sandbox")
+@app.post("/dev/sandbox/")
+async def sandbox_test(request: SandboxRequest):
+    start = time.time()
+    try:
+        response = await run_in_threadpool(
+            run_weather_agent, request.prompt, request.location, request.language
+        )
+        duration_ms = round((time.time() - start) * 1000, 2)
+        return {
+            "status": "success",
+            "duration_ms": duration_ms,
+            "prompt": request.prompt,
+            "location": request.location,
+            "language": request.language,
+            "response": response,
+            "model_used": GROQ_MODEL,
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as exc:
+        duration_ms = round((time.time() - start) * 1000, 2)
+        res = JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "duration_ms": duration_ms,
+                "error": str(exc),
+                "timestamp": datetime.now().isoformat()
+            }
+        )
+        res.headers["Access-Control-Allow-Origin"] = "*"
+        res.headers["Access-Control-Allow-Methods"] = "*"
+        res.headers["Access-Control-Allow-Headers"] = "*"
+        return res
+
+
 @app.get("/health")
 @app.get("/health/")
 async def health():

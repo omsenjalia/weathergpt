@@ -33,6 +33,11 @@ export async function getDevDiagnostics() {
   }
 }
 
+export async function runSandboxPrompt(prompt, location = 'New Delhi', language = 'English') {
+  const res = await axios.post(`${API_BASE}/dev/sandbox`, { prompt, location, language }, { timeout: 30000 });
+  return res.data;
+}
+
 export async function getWeatherByCoords(lat, lon, days = 14) {
   const ensemble = await getEnsembleWeather(lat, lon, days);
   const raw = ensemble.rawOpenMeteo || {};

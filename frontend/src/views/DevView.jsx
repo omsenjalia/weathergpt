@@ -15,9 +15,23 @@ import {
   ShieldCheck,
   ChevronDown,
   ChevronUp,
+  Download,
+  Play,
+  Sliders,
+  Globe2,
+  AlertTriangle,
 } from 'lucide-react'
-import { getDevDiagnostics } from '../api'
+import { getDevDiagnostics, runSandboxPrompt } from '../api'
 import { getEnsembleWeather } from '../utils/ensembleEngine'
+
+const TEST_CITIES = [
+  { name: 'New Delhi', lat: 28.6139, lon: 77.209 },
+  { name: 'Mumbai', lat: 19.076, lon: 72.8777 },
+  { name: 'Leh (Ladakh)', lat: 34.1526, lon: 77.5771 },
+  { name: 'Srinagar', lat: 34.0837, lon: 74.7973 },
+  { name: 'Cherrapunji', lat: 25.27, lon: 91.73 },
+  { name: 'Jaisalmer', lat: 26.9157, lon: 70.9083 },
+]
 
 export default function DevView({ location, language }) {
   const [devData, setDevData] = useState(null)
@@ -29,6 +43,23 @@ export default function DevView({ location, language }) {
   const [testingEnsemble, setTestingEnsemble] = useState(false)
   const [expandedJson, setExpandedJson] = useState({})
   const [activeTab, setActiveTab] = useState('overview')
+
+  // AI Sandbox state
+  const [sandboxPrompt, setSandboxPrompt] = useState('Will it rain in Ahmedabad this week?')
+  const [sandboxLocation, setSandboxLocation] = useState('Ahmedabad')
+  const [sandboxResult, setSandboxResult] = useState(null)
+  const [runningSandbox, setRunningSandbox] = useState(false)
+
+  // Hazard Simulator state
+  const [simTemp, setSimTemp] = useState(38)
+  const [simRain, setSimRain] = useState(85)
+  const [simWind, setSimWind] = useState(40)
+  const [simAqi, setSimAqi] = useState(165)
+  const [simUv, setSimUv] = useState(9)
+
+  // City Stress Test state
+  const [stressResults, setStressResults] = useState([])
+  const [testingStress, setTestingStress] = useState(false)
 
   const fetchDiagnostics = async () => {
     setLoading(true)
@@ -108,6 +139,68 @@ export default function DevView({ location, language }) {
     }
   }
 
+  const handleRunSandbox = async () => {
+    if (!sandboxPrompt.trim()) return
+    setRunningSandbox(true)
+    setSandboxResult(null)
+    try {
+      const data = await runSandboxPrompt(sandboxPrompt.trim(), sandboxLocation, language?.name || 'English')
+      setSandboxResult(data)
+    } catch (err) {
+      setSandboxResult({ status: 'error', error: err.message })
+    } finally {
+      setRunningSandbox(false)
+    }
+  }
+
+  const runMultiCityStress = async () => {
+    setTestingStress(true)
+    setStressResults([])
+    const results = []
+    for (const city of TEST_CITIES) {
+      const start = performance.now()
+      try {
+        const res = await getEnsembleWeather(city.lat, city.lon, 3)
+        const duration = Math.round(performance.now() - start)
+        results.push({
+          city: city.name,
+          status: 'SUCCESS',
+          latencyMs: duration,
+          temp: res.fused?.temp,
+          providersCount: res.providersUsed?.length || 0,
+        })
+      } catch (err) {
+        const duration = Math.round(performance.now() - start)
+        results.push({ city: city.name, status: 'FAILED', latencyMs: duration, error: err.message })
+      }
+    }
+    setStressResults(results)
+    setTestingStress(false)
+  }
+
+  const exportDiagnosticsReport = () => {
+    const report = {
+      timestamp: new Date().toISOString(),
+      app: 'WeatherGPT AI Diagnostics Report',
+      activeLocation: location,
+      activeLanguage: language,
+      devData,
+      ensembleData,
+      testResult,
+      sandboxResult,
+      localStorage: localStorageEntries(),
+    }
+    const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `weathergpt-diagnostics-${Date.now()}.json`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
   const toggleJsonExpand = (key) => {
     setExpandedJson((prev) => ({ ...prev, [key]: !prev[key] }))
   }
@@ -128,6 +221,14 @@ export default function DevView({ location, language }) {
     return items
   }
 
+  // Computed hazard warnings for simulator
+  const simulatedHazards = []
+  if (simUv >= 8) simulatedHazards.push(`Extreme UV Index (${simUv}). Wear SPF 30+ & seek shade.`)
+  if (simWind >= 35) simulatedHazards.push(`High Wind Warning (${simWind} km/h). Secure loose outdoor objects.`)
+  if (simAqi >= 150) simulatedHazards.push(`Unhealthy Air Quality (AQI ${simAqi}). Limit outdoor exertion.`)
+  if (simRain >= 75) simulatedHazards.push(`High Rain Probability (${simRain}%). Carry an umbrella today!`)
+  if (simTemp >= 40) simulatedHazards.push(`Heatwave Advisory (${simTemp}°C). Stay hydrated and avoid peak sun.`)
+
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#0a0814] text-white p-4 md:p-6 no-scrollbar">
       <div className="max-w-6xl mx-auto w-full flex flex-col gap-6 h-full overflow-y-auto no-scrollbar pb-20">
@@ -146,12 +247,20 @@ export default function DevView({ location, language }) {
                 </span>
               </div>
               <p className="text-white/60 text-xs md:text-sm mt-0.5">
-                Real-time backend telemetry, API latency benchmarker & ensemble inspector
+                Real-time backend telemetry, AI prompt sandbox, IMD simulator & ensemble inspector
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={exportDiagnosticsReport}
+              className="glass hover:bg-white/15 text-white/90 px-3.5 py-2 rounded-2xl text-xs font-semibold flex items-center gap-1.5 border border-white/15 cursor-pointer transition-all"
+            >
+              <Download size={14} />
+              <span>Export JSON Report</span>
+            </button>
+
             <button
               onClick={fetchDiagnostics}
               disabled={loading}
@@ -243,10 +352,13 @@ export default function DevView({ location, language }) {
         <div className="flex items-center gap-2 border-b border-white/10 pb-3 overflow-x-auto no-scrollbar">
           {[
             { id: 'overview', label: 'Overview & Telemetry', icon: Activity },
+            { id: 'sandbox', label: 'AI Agent Sandbox', icon: Play },
+            { id: 'simulator', label: 'Hazard Advisory Simulator', icon: Sliders },
+            { id: 'stress', label: 'Multi-City Stress Tester', icon: Globe2 },
             { id: 'endpoints', label: 'API Endpoint Tester', icon: Code },
             { id: 'ensemble', label: 'Ensemble Inspector', icon: Layers },
             { id: 'storage', label: 'Client Storage & Geo', icon: Database },
-            { id: 'logs', label: 'Recent System Logs', icon: Terminal },
+            { id: 'logs', label: 'System Logs', icon: Terminal },
           ].map((tab) => {
             const Icon = tab.icon
             const isActive = activeTab === tab.id
@@ -270,7 +382,6 @@ export default function DevView({ location, language }) {
         {/* TAB 1: OVERVIEW */}
         {activeTab === 'overview' && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-            {/* System Details */}
             <div className="lg:col-span-6 glass rounded-3xl p-6 border border-white/10 flex flex-col gap-4">
               <h3 className="text-white font-bold font-display text-sm uppercase tracking-wider flex items-center gap-2">
                 <Server size={16} className="text-accent" /> System Runtime Details
@@ -296,7 +407,6 @@ export default function DevView({ location, language }) {
               </div>
             </div>
 
-            {/* Registered Endpoints & AI Tools */}
             <div className="lg:col-span-6 flex flex-col gap-6">
               <div className="glass rounded-3xl p-6 border border-white/10 flex flex-col gap-3">
                 <h3 className="text-white font-bold font-display text-sm uppercase tracking-wider flex items-center gap-2">
@@ -325,7 +435,6 @@ export default function DevView({ location, language }) {
               </div>
             </div>
 
-            {/* Provider Keys Configuration Status */}
             <div className="lg:col-span-12 glass rounded-3xl p-6 border border-white/10">
               <h3 className="text-white font-bold font-display text-sm uppercase tracking-wider mb-4 flex items-center gap-2">
                 <ShieldCheck size={16} className="text-emerald-400" /> Provider Environment Key Statuses
@@ -350,7 +459,196 @@ export default function DevView({ location, language }) {
           </div>
         )}
 
-        {/* TAB 2: ENDPOINT TESTER */}
+        {/* TAB 2: AI AGENT SANDBOX */}
+        {activeTab === 'sandbox' && (
+          <div className="flex flex-col gap-6">
+            <div className="glass rounded-3xl p-6 border border-white/10 flex flex-col gap-4">
+              <h3 className="text-white font-bold font-display text-sm uppercase tracking-wider flex items-center gap-2">
+                <Play size={16} className="text-accent" /> AI Weather Agent Prompt Sandbox
+              </h3>
+              <p className="text-white/60 text-xs">
+                Directly execute prompts against ChatGroq (`qwen/qwen3.8-27b`) and monitor execution latency & model tool calls.
+              </p>
+
+              <div className="flex flex-col gap-3">
+                <div className="flex flex-wrap gap-2">
+                  <input
+                    type="text"
+                    value={sandboxPrompt}
+                    onChange={(e) => setSandboxPrompt(e.target.value)}
+                    placeholder="Enter test prompt..."
+                    className="flex-1 glass rounded-2xl px-4 py-2.5 text-xs text-white bg-white/5 border border-white/15 focus:outline-none focus:border-accent"
+                  />
+                  <input
+                    type="text"
+                    value={sandboxLocation}
+                    onChange={(e) => setSandboxLocation(e.target.value)}
+                    placeholder="Location"
+                    className="w-36 glass rounded-2xl px-4 py-2.5 text-xs text-white bg-white/5 border border-white/15 focus:outline-none focus:border-accent"
+                  />
+                  <button
+                    onClick={handleRunSandbox}
+                    disabled={runningSandbox}
+                    className="bg-accent hover:bg-accent/90 text-white font-semibold px-5 py-2.5 rounded-2xl text-xs flex items-center gap-2 cursor-pointer transition-all shadow-md"
+                  >
+                    <Play size={14} className={runningSandbox ? 'animate-spin' : ''} />
+                    <span>{runningSandbox ? 'Executing...' : 'Run Prompt'}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {sandboxResult && (
+              <div className="glass rounded-3xl p-6 border border-white/15 bg-black/40 shadow-2xl flex flex-col gap-4">
+                <div className="flex items-center justify-between pb-3 border-b border-white/10 text-xs font-mono">
+                  <span className="text-emerald-400 font-bold">STATUS: {sandboxResult.status?.toUpperCase()}</span>
+                  <span className="text-sky-300">Duration: {sandboxResult.duration_ms} ms</span>
+                  <span className="text-amber-300">Model: {sandboxResult.model_used || 'qwen3.8-27b'}</span>
+                </div>
+
+                <div>
+                  <h4 className="text-xs text-white/50 uppercase font-mono mb-1">Agent Response:</h4>
+                  <div className="glass rounded-2xl p-4 text-xs text-white/90 leading-relaxed bg-white/5 border border-white/10 whitespace-pre-wrap font-sans">
+                    {sandboxResult.response || sandboxResult.error}
+                  </div>
+                </div>
+
+                <div>
+                  <h4 className="text-xs text-white/50 uppercase font-mono mb-1">Raw Execution Payload:</h4>
+                  <pre className="text-xs font-mono text-emerald-300 bg-black/60 rounded-2xl p-4 overflow-x-auto border border-white/10">
+                    {JSON.stringify(sandboxResult, null, 2)}
+                  </pre>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB 3: HAZARD SIMULATOR */}
+        {activeTab === 'simulator' && (
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            <div className="lg:col-span-6 glass rounded-3xl p-6 border border-white/10 flex flex-col gap-5">
+              <h3 className="text-white font-bold font-display text-sm uppercase tracking-wider flex items-center gap-2">
+                <Sliders size={16} className="text-amber-400" /> IMD Hazard Advisory Rule Simulator
+              </h3>
+
+              <div className="flex flex-col gap-4 text-xs">
+                <div>
+                  <div className="flex justify-between mb-1">
+                    <span className="text-white/70">Temperature (°C):</span>
+                    <span className="text-amber-300 font-bold">{simTemp}°C</span>
+                  </div>
+                  <input type="range" min="0" max="50" value={simTemp} onChange={(e) => setSimTemp(Number(e.target.value))} className="w-full accent-accent" />
+                </div>
+
+                <div>
+                  <div className="flex justify-between mb-1">
+                    <span className="text-white/70">Rain Probability (%):</span>
+                    <span className="text-sky-300 font-bold">{simRain}%</span>
+                  </div>
+                  <input type="range" min="0" max="100" value={simRain} onChange={(e) => setSimRain(Number(e.target.value))} className="w-full accent-accent" />
+                </div>
+
+                <div>
+                  <div className="flex justify-between mb-1">
+                    <span className="text-white/70">Wind Speed (km/h):</span>
+                    <span className="text-teal-300 font-bold">{simWind} km/h</span>
+                  </div>
+                  <input type="range" min="0" max="100" value={simWind} onChange={(e) => setSimWind(Number(e.target.value))} className="w-full accent-accent" />
+                </div>
+
+                <div>
+                  <div className="flex justify-between mb-1">
+                    <span className="text-white/70">Air Quality (US AQI):</span>
+                    <span className="text-purple-300 font-bold">{simAqi}</span>
+                  </div>
+                  <input type="range" min="0" max="400" value={simAqi} onChange={(e) => setSimAqi(Number(e.target.value))} className="w-full accent-accent" />
+                </div>
+
+                <div>
+                  <div className="flex justify-between mb-1">
+                    <span className="text-white/70">UV Index:</span>
+                    <span className="text-rose-300 font-bold">{simUv}</span>
+                  </div>
+                  <input type="range" min="0" max="12" value={simUv} onChange={(e) => setSimUv(Number(e.target.value))} className="w-full accent-accent" />
+                </div>
+              </div>
+            </div>
+
+            <div className="lg:col-span-6 glass rounded-3xl p-6 border border-white/10 flex flex-col gap-4">
+              <h3 className="text-white font-bold font-display text-sm uppercase tracking-wider flex items-center gap-2">
+                <AlertTriangle size={16} className="text-rose-400" /> Simulated Dashboard Banner Output
+              </h3>
+
+              {simulatedHazards.length > 0 ? (
+                <div className="glass rounded-2xl p-4 border border-amber-500/40 bg-amber-500/10 flex flex-col gap-2">
+                  <div className="flex items-center gap-2 text-amber-400 font-bold text-xs uppercase tracking-wider">
+                    <AlertTriangle size={16} /> Live Severe Environmental Advisories ({simulatedHazards.length})
+                  </div>
+                  <ul className="flex flex-col gap-1 text-xs text-white/90 list-disc list-inside">
+                    {simulatedHazards.map((h, i) => (
+                      <li key={i}>{h}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <div className="glass rounded-2xl p-6 text-center border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-xs">
+                  ✅ Standard Conditions — No severe hazard advisories triggered.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* TAB 4: STRESS TESTER */}
+        {activeTab === 'stress' && (
+          <div className="flex flex-col gap-6">
+            <div className="glass rounded-3xl p-6 border border-white/10 flex items-center justify-between gap-4">
+              <div>
+                <h3 className="text-white font-bold font-display text-sm uppercase tracking-wider flex items-center gap-2">
+                  <Globe2 size={16} className="text-sky-400" /> Multi-City Ensemble Telemetry Stress Tester
+                </h3>
+                <p className="text-white/50 text-xs mt-1">
+                  Tests ensemble data fetching across 6 diverse geographical regions (Delhi, Mumbai, Ladakh, Kashmir, Meghalaya, Thar Desert).
+                </p>
+              </div>
+
+              <button
+                onClick={runMultiCityStress}
+                disabled={testingStress}
+                className="bg-sky-500 hover:bg-sky-600 text-white font-semibold px-4 py-2.5 rounded-2xl text-xs flex items-center gap-2 transition-all cursor-pointer shadow-md flex-shrink-0"
+              >
+                <RefreshCw size={14} className={testingStress ? 'animate-spin' : ''} />
+                <span>Run Stress Test</span>
+              </button>
+            </div>
+
+            {stressResults.length > 0 && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {stressResults.map((r, i) => (
+                  <div key={i} className="glass rounded-2xl p-4 border border-white/10 flex flex-col justify-between">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-bold text-white font-display">{r.city}</span>
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${r.status === 'SUCCESS' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-rose-500/20 text-rose-300'}`}>
+                        {r.status}
+                      </span>
+                    </div>
+                    {r.status === 'SUCCESS' ? (
+                      <div>
+                        <p className="text-xl font-bold text-emerald-300">{r.temp}°C</p>
+                        <p className="text-xs text-white/50">Latency: {r.latencyMs} ms | Providers: {r.providersCount}</p>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-rose-300">{r.error}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB 5: ENDPOINT TESTER */}
         {activeTab === 'endpoints' && (
           <div className="flex flex-col gap-6">
             <div className="glass rounded-3xl p-6 border border-white/10 flex flex-col gap-4">
@@ -385,7 +683,6 @@ export default function DevView({ location, language }) {
               </div>
             </div>
 
-            {/* Test Result Display */}
             {testResult && (
               <div className="glass rounded-3xl p-6 border border-white/15 bg-black/40 shadow-2xl">
                 <div className="flex items-center justify-between pb-3 border-b border-white/10 mb-4">
@@ -412,7 +709,7 @@ export default function DevView({ location, language }) {
           </div>
         )}
 
-        {/* TAB 3: ENSEMBLE INSPECTOR */}
+        {/* TAB 6: ENSEMBLE INSPECTOR */}
         {activeTab === 'ensemble' && (
           <div className="flex flex-col gap-6">
             <div className="glass rounded-3xl p-6 border border-white/10 flex items-center justify-between gap-4">
@@ -463,7 +760,7 @@ export default function DevView({ location, language }) {
           </div>
         )}
 
-        {/* TAB 4: CLIENT STORAGE & GEO */}
+        {/* TAB 7: CLIENT STORAGE & GEO */}
         {activeTab === 'storage' && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             <div className="lg:col-span-6 glass rounded-3xl p-6 border border-white/10 flex flex-col gap-3">
@@ -486,7 +783,7 @@ export default function DevView({ location, language }) {
           </div>
         )}
 
-        {/* TAB 5: SYSTEM LOGS */}
+        {/* TAB 8: SYSTEM LOGS */}
         {activeTab === 'logs' && (
           <div className="glass rounded-3xl p-6 border border-white/15 bg-black/50 shadow-2xl flex flex-col gap-3">
             <h3 className="text-white font-bold font-display text-sm uppercase tracking-wider flex items-center gap-2 mb-2">
