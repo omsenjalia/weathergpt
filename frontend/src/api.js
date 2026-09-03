@@ -3,7 +3,7 @@ import { getEnsembleWeather } from './utils/ensembleEngine';
 
 // Falls back to localhost for local development. Set VITE_API_URL in .env for
 // staging / production deployments.
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8888';
+const API_BASE = (import.meta.env.VITE_API_URL || 'http://localhost:8888').replace(/\/+$/, '');
 
 export async function sendMessage(messagesPayload, location = '', language = 'English') {
   const formattedMessages = Array.isArray(messagesPayload)
@@ -23,8 +23,14 @@ export async function sendMessage(messagesPayload, location = '', language = 'En
 }
 
 export async function getDevDiagnostics() {
-  const res = await axios.get(`${API_BASE}/dev`, { timeout: 5000 });
-  return res.data;
+  try {
+    const res = await axios.get(`${API_BASE}/dev`, { timeout: 15000 });
+    return res.data;
+  } catch (err) {
+    // Retry once to allow Vercel serverless cold-start warmup
+    const res = await axios.get(`${API_BASE}/dev`, { timeout: 15000 });
+    return res.data;
+  }
 }
 
 export async function getWeatherByCoords(lat, lon, days = 14) {

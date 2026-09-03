@@ -50,19 +50,20 @@ export default function DevView({ location, language }) {
   const runLatencyTest = async (type) => {
     setTestingEndpoint(true)
     const start = performance.now()
+    const apiBase = (import.meta.env.VITE_API_URL || 'http://localhost:8888').replace(/\/+$/, '')
     try {
       let resData = null
       let url = ''
       if (type === 'health') {
-        url = `${import.meta.env.VITE_API_URL || 'http://localhost:8888'}/health`
+        url = `${apiBase}/health`
         const res = await fetch(url)
         resData = await res.json()
       } else if (type === 'dev') {
-        url = `${import.meta.env.VITE_API_URL || 'http://localhost:8888'}/dev`
+        url = `${apiBase}/dev`
         const res = await fetch(url)
         resData = await res.json()
       } else if (type === 'chat') {
-        url = `${import.meta.env.VITE_API_URL || 'http://localhost:8888'}/chat`
+        url = `${apiBase}/chat`
         const res = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

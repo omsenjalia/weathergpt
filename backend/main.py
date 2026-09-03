@@ -87,11 +87,13 @@ async def chat(request: ChatRequest):
 
 
 @app.get("/health")
+@app.get("/health/")
 async def health():
     return {"status": "ok"}
 
 
 @app.get("/dev")
+@app.get("/dev/")
 async def dev_diagnostics():
     uptime = round(time.time() - START_TIME, 2)
     if psutil:
