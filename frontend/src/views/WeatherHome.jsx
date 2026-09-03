@@ -92,8 +92,6 @@ export default function WeatherHome({ location, language, onOpenLocationPicker }
   const [forecast, setForecast] = useState([])
   const [hourly, setHourly] = useState([])
   const [loading, setLoading] = useState(true)
-  const [city, setCity] = useState('New Delhi')
-  const [cityInput, setCityInput] = useState('')
   const [forecastTab, setForecastTab] = useState('7days')
   const [selectedHour, setSelectedHour] = useState(null)
   const [favorites, setFavorites] = useState([])
@@ -113,6 +111,7 @@ export default function WeatherHome({ location, language, onOpenLocationPicker }
   }, [])
 
   const toggleFavorite = (cityObj) => {
+    if (!cityObj?.name) return
     let updated
     const exists = favorites.some((f) => f.name.toLowerCase() === cityObj.name.toLowerCase())
     if (exists) {
@@ -128,7 +127,7 @@ export default function WeatherHome({ location, language, onOpenLocationPicker }
     }
   }
 
-  const loadWeather = async (lat, lon, cityName) => {
+  const loadWeather = async (lat, lon) => {
     setLoading(true)
     try {
       const [data, aqiData] = await Promise.all([
@@ -193,8 +192,6 @@ export default function WeatherHome({ location, language, onOpenLocationPicker }
           .slice(0, 24)
         setHourly(hours)
       }
-
-      setCity(cityName)
     } catch (err) {
       console.error('Weather fetch failed:', err)
     } finally {
@@ -204,22 +201,9 @@ export default function WeatherHome({ location, language, onOpenLocationPicker }
 
   useEffect(() => {
     if (location?.lat && location?.lon) {
-      loadWeather(location.lat, location.lon, location.name || 'Selected Location')
+      loadWeather(location.lat, location.lon)
     }
   }, [location])
-
-  const handleSearch = async () => {
-    if (!cityInput.trim()) return
-    try {
-      const result = await geocodeCity(cityInput.trim())
-      if (result) {
-        loadWeather(result.latitude, result.longitude, result.name || cityInput.trim())
-        setCityInput('')
-      }
-    } catch (err) {
-      console.error('Geocoding failed:', err)
-    }
-  }
 
   if (loading) {
     return (
@@ -229,10 +213,11 @@ export default function WeatherHome({ location, language, onOpenLocationPicker }
     )
   }
 
+  const activeCityName = location?.name || 'Selected Location'
   const uvInfo = getUVCategory(weather.uvIndex)
   const aqiInfo = weather.aqi ? getAQICategory(weather.aqi) : null
   const displayedForecast = forecastTab === '7days' ? forecast.slice(0, 7) : forecast
-  const isCurrentFavorite = favorites.some((f) => f.name.toLowerCase() === city.toLowerCase())
+  const isCurrentFavorite = favorites.some((f) => f.name.toLowerCase() === activeCityName.toLowerCase())
 
   // Detect severe hazards
   const hazards = []
@@ -247,9 +232,9 @@ export default function WeatherHome({ location, language, onOpenLocationPicker }
       <div className="glass border-b border-white/10 px-4 py-3 flex-shrink-0 z-20">
         <div className="max-w-6xl mx-auto flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <h1 className="text-white text-lg md:text-xl font-bold font-display truncate">{city}</h1>
+            <h1 className="text-white text-lg md:text-xl font-bold font-display truncate">{activeCityName}</h1>
             <button
-              onClick={() => toggleFavorite({ name: city, country: location?.country || 'India', lat: location?.lat, lon: location?.lon })}
+              onClick={() => toggleFavorite({ name: activeCityName, country: location?.country || 'India', lat: location?.lat, lon: location?.lon })}
               aria-label="Bookmark city"
               className="text-white/50 hover:text-amber-400 p-1 cursor-pointer transition-colors"
             >
