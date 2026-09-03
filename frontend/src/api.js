@@ -2,7 +2,7 @@ import axios from 'axios';
 
 // Falls back to localhost for local development. Set VITE_API_URL in .env for
 // staging / production deployments.
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8888';
 
 export async function sendMessage(message, location = '') {
   const res = await axios.post(`${API_BASE}/chat`, { message, location });
