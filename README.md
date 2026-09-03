@@ -96,6 +96,26 @@ npm run dev
 
 Open [http://localhost:5173](http://localhost:5173)
 
+## Deploying to Vercel
+
+Deploy this repository as two separate Vercel projects:
+
+### Frontend project
+
+- Set **Root Directory** to `frontend`.
+- Use the detected Vite framework, `npm ci` as the install command, `npm run build` as the build command, and `dist` as the output directory.
+- Set `VITE_API_URL` to the deployed backend origin, for example `https://your-backend.vercel.app`.
+- Set `VITE_WINDY_API_KEY` if the map view is enabled.
+
+### Backend project
+
+- Set **Root Directory** to `backend`.
+- Vercel uses `api/index.py` as the Python function entrypoint.
+- Add `GROQ_API_KEY` to the backend project environment variables. Add `GROQ_MODEL` only when overriding the default model.
+- Verify `https://your-backend.vercel.app/health` returns `{\"status\":\"ok\"}` before configuring `VITE_API_URL`.
+
+The projects intentionally have separate `vercel.json` files; do not use the removed root-level service routing configuration.
+
 ## Environment Variables
 
 ### Backend (.env)
