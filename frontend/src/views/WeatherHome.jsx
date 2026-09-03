@@ -2,34 +2,22 @@ import { useState, useEffect } from 'react'
 import { getWeatherByCoords, geocodeCity } from '../api'
 import BlurText from '../components/bits/BlurText'
 import AnimatedContent from '../components/bits/AnimatedContent'
+import { Sun, CloudSun, Cloud, CloudFog, CloudDrizzle, CloudRain, CloudSnow, CloudLightning, Haze, Thermometer, Droplets, Wind, Search, X } from 'lucide-react'
 
-const WEATHER_EMOJI = {
-  0: '☀️',
-  1: '🌤️', 2: '⛅', 3: '☁️',
-  45: '🌫️', 48: '🌫️',
-  51: '🌦️', 53: '🌦️', 55: '🌦️',
-  61: '🌧️', 63: '🌧️', 65: '🌧️',
-  71: '🌨️', 73: '🌨️', 75: '❄️', 77: '🌨️',
-  80: '🌦️', 81: '🌦️', 82: '🌦️',
-  85: '🌨️', 86: '❄️',
-  95: '⛈️', 96: '⛈️', 99: '⛈️',
-}
-
-function getEmoji(code) {
-  return WEATHER_EMOJI[code] || '🌡️'
-}
-
-function formatHour(isoString) {
-  const d = new Date(isoString)
-  const h = d.getHours()
-  if (h === 0) return '12AM'
-  if (h === 12) return '12PM'
-  return h > 12 ? `${h - 12}PM` : `${h}AM`
-}
-
-function formatDay(isoString) {
-  const d = new Date(isoString + 'T00:00:00')
-  return d.toLocaleDateString('en-US', { weekday: 'short' })
+function WeatherIcon({ code, size = 48 }) {
+  let Icon = Sun
+  if (code === 0) Icon = Sun
+  else if (code === 1) Icon = Sun
+  else if (code === 2) Icon = CloudSun
+  else if (code === 3) Icon = Cloud
+  else if (code === 45 || code === 48) Icon = CloudFog
+  else if (code >= 51 && code <= 55) Icon = CloudDrizzle
+  else if (code >= 61 && code <= 65) Icon = CloudRain
+  else if (code >= 71 && code <= 77) Icon = CloudSnow
+  else if (code >= 80 && code <= 82) Icon = CloudRain
+  else if (code === 85 || code === 86) Icon = CloudSnow
+  else if (code >= 95 && code <= 99) Icon = CloudLightning
+  return <Icon className="text-accent" size={size} strokeWidth={1.5} />
 }
 
 function getCondition(code) {
@@ -47,6 +35,19 @@ function getCondition(code) {
   return 'Unknown'
 }
 
+function formatHour(isoString) {
+  const d = new Date(isoString)
+  const h = d.getHours()
+  if (h === 0) return '12AM'
+  if (h === 12) return '12PM'
+  return h > 12 ? `${h - 12}PM` : `${h}AM`
+}
+
+function formatDay(isoString) {
+  const d = new Date(isoString + 'T00:00:00')
+  return d.toLocaleDateString('en-US', { weekday: 'short' })
+}
+
 export default function WeatherHome({ onCoordsChange }) {
   const [weather, setWeather] = useState(null)
   const [forecast, setForecast] = useState([])
@@ -61,7 +62,6 @@ export default function WeatherHome({ onCoordsChange }) {
     try {
       const data = await getWeatherByCoords(lat, lon)
       const current = data.current
-      // Handle both 'weather_code' (new) and 'weathercode' (old) field names
       const currentCode = current.weather_code ?? current.weathercode ?? 0
       setWeather({
         temp: current.temperature_2m,
@@ -94,9 +94,6 @@ export default function WeatherHome({ onCoordsChange }) {
             temp: hourlyData.temperature_2m[i],
             code: hourlyCodes[i] ?? 0,
           }))
-          // Only keep hours from now onwards. The previous double-condition
-          // `d >= now && d.getHours() >= currentHour` incorrectly dropped
-          // early-morning hours from tomorrow and beyond.
           .filter((h) => new Date(h.time) >= now)
           .slice(0, 24)
         setHourly(hours)
@@ -116,10 +113,6 @@ export default function WeatherHome({ onCoordsChange }) {
         const { latitude: lat, longitude: lon } = pos.coords
         onCoordsChange?.({ lat, lon })
         try {
-          // Use OpenStreetMap Nominatim for reverse geocoding (lat/lon → city
-          // name). The Open-Meteo geocoding API only does forward lookup (city
-          // name → coords) and silently returns no results when lat/lon params
-          // are passed, always falling back to 'Your Location'.
           const res = await fetch(
             `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`
           )
@@ -169,59 +162,64 @@ export default function WeatherHome({ onCoordsChange }) {
   return (
     <div className="flex-1 overflow-y-auto no-scrollbar pb-28">
       {/* Header */}
-      <AnimatedContent className="fixed top-0 left-0 right-0 z-20 px-6 pt-10 pb-4 glass border-b border-white/10">
-        <div className="flex items-center justify-between">
-          <h1 className="text-white text-xl font-semibold font-display">{city}</h1>
+      <AnimatedContent
+        className="fixed top-0 left-0 right-0 z-20 px-5 pb-4 glass border-b border-white/10"
+        style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 2.5rem)' }}
+      >
+        <div className="flex items-center justify-between max-w-3xl mx-auto w-full">
+          <h1 className="text-white text-lg sm:text-xl font-semibold font-display truncate">{city}</h1>
           <button
             onClick={() => setShowSearch(!showSearch)}
-            className="text-white/70 hover:text-white text-xl transition-colors"
+            aria-label="Search city"
+            className="text-white/70 hover:text-white transition-colors touch-target flex items-center justify-center"
           >
-            🔍
+            <Search size={22} />
           </button>
         </div>
         {showSearch && (
-          <div className="mt-3 flex gap-2">
+          <div className="mt-3 flex gap-2 max-w-3xl mx-auto w-full">
             <input
               autoFocus
               value={cityInput}
               onChange={(e) => setCityInput(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
               placeholder="Search city..."
-              className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-2 text-white text-sm placeholder:text-white/30 focus:outline-none focus:ring-1 focus:ring-accent/50"
+              className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-sm placeholder:text-white/30 focus:outline-none focus:ring-1 focus:ring-accent/50"
             />
             <button
               onClick={() => { setShowSearch(false); setCityInput('') }}
-              className="text-white/50 hover:text-white text-sm px-2"
+              aria-label="Close search"
+              className="text-white/50 hover:text-white px-3 touch-target flex items-center justify-center"
             >
-              ✕
+              <X size={18} />
             </button>
           </div>
         )}
       </AnimatedContent>
 
       {/* Weather Content */}
-      <div className="pt-28 px-4">
+      <div className="px-4 max-w-3xl mx-auto" style={{ paddingTop: 'calc(env(safe-area-inset-top, 0px) + 5.5rem)' }}>
         {/* Temperature Section */}
         <div className="text-center mb-6">
-          <AnimatedContent delay={0} className="text-7xl mb-2">
-            {getEmoji(weather.code)}
+          <AnimatedContent delay={0} className="inline-flex mb-2">
+            <WeatherIcon code={weather.code} size={72} />
           </AnimatedContent>
-          <div className="text-8xl font-display font-extrabold text-white mb-2">
+          <div className="text-fluid-4xl font-display font-extrabold text-white mb-2">
             <BlurText text={`${Math.round(weather.temp)}°`} />
           </div>
           <AnimatedContent delay={0.2}>
-            <p className="text-white/70 text-lg font-light">{weather.condition}</p>
+            <p className="text-white/70 text-base sm:text-lg font-light">{weather.condition}</p>
           </AnimatedContent>
           <AnimatedContent delay={0.25}>
-            <div className="flex justify-center gap-3 mt-4">
-              <span className="glass rounded-full px-3 py-1 text-white/70 text-xs">
-                💧 {weather.humidity}%
+            <div className="flex flex-wrap justify-center gap-2 sm:gap-3 mt-4">
+              <span className="glass rounded-full px-3 py-1.5 text-white/70 text-xs flex items-center gap-1.5">
+                <Droplets size={14} className="text-sky-300" /> {weather.humidity}%
               </span>
-              <span className="glass rounded-full px-3 py-1 text-white/70 text-xs">
-                💨 {weather.windSpeed} km/h
+              <span className="glass rounded-full px-3 py-1.5 text-white/70 text-xs flex items-center gap-1.5">
+                <Wind size={14} className="text-emerald-300" /> {weather.windSpeed} km/h
               </span>
-              <span className="glass rounded-full px-3 py-1 text-white/70 text-xs">
-                🌡 Feels {Math.round(weather.feelsLike)}°
+              <span className="glass rounded-full px-3 py-1.5 text-white/70 text-xs flex items-center gap-1.5">
+                <Thermometer size={14} className="text-orange-300" /> Feels {Math.round(weather.feelsLike)}°
               </span>
             </div>
           </AnimatedContent>
@@ -233,11 +231,11 @@ export default function WeatherHome({ onCoordsChange }) {
             <div className="glass rounded-3xl p-4 mb-3">
               <div className="flex gap-3 overflow-x-auto no-scrollbar">
                 {hourly.map((h, i) => (
-                  <div key={i} className="flex-shrink-0 w-16 text-center flex flex-col items-center gap-1">
+                  <div key={i} className="flex-shrink-0 w-14 sm:w-16 text-center flex flex-col items-center gap-1">
                     <span className="text-white/50 text-xs">
                       {i === 0 ? 'Now' : formatHour(h.time)}
                     </span>
-                    <span className="text-xl">{getEmoji(h.code)}</span>
+                    <WeatherIcon code={h.code} size={20} />
                     <span className="text-white text-sm font-semibold">
                       {Math.round(h.temp)}°
                     </span>
@@ -258,14 +256,12 @@ export default function WeatherHome({ onCoordsChange }) {
               {forecast.map((day, i) => (
                 <div
                   key={i}
-                  className={`flex justify-between items-center py-2 ${
-                    i < forecast.length - 1 ? 'border-b border-white/10' : ''
-                  }`}
+                  className="flex justify-between items-center py-2.5"
                 >
-                  <span className="text-white font-medium w-10">
+                  <span className="text-white font-medium w-14 text-sm">
                     {i === 0 ? 'Today' : formatDay(day.date)}
                   </span>
-                  <span className="text-xl">{getEmoji(day.code)}</span>
+                  <WeatherIcon code={day.code} size={22} />
                   <span className="text-white/70 text-sm">
                     {Math.round(day.max)}° / {Math.round(day.min)}°
                   </span>

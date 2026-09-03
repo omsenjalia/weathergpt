@@ -1,3 +1,4 @@
+import os
 import operator
 from typing import Annotated, Sequence, TypedDict
 
@@ -15,7 +16,15 @@ class AgentState(TypedDict):
     messages: Annotated[Sequence[BaseMessage], operator.add]
 
 
-llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0).bind_tools(TOOLS)
+# NOTE: Model name must be one your Groq account has access to. Check yours with:
+#   curl https://api.groq.com/openai/v1/models -H "Authorization: Bearer $GROQ_API_KEY"
+# `llama-3.3-70b-versatile` was removed from free accounts in 2026.
+# Qwen3 models have native support for 119 languages/dialects, including
+# Hindi, Tamil, Telugu, Kannada, Malayalam, Bengali, Punjabi, Marathi, Gujarati,
+# Oriya, Assamese, etc. — ideal for a multilingual India weather assistant.
+GROQ_MODEL = os.getenv("GROQ_MODEL", "qwen/qwen3.8-27b")
+
+llm = ChatGroq(model=GROQ_MODEL, temperature=0).bind_tools(TOOLS)
 
 
 def agent_node(state: AgentState):
@@ -53,12 +62,13 @@ def run_weather_agent(user_message: str, user_location: str = "") -> str:
 
 IMPORTANT RULES:
 1. Always call geocode_city FIRST to get coordinates before calling any weather tool.
-2. Respond in {language} language.
-3. Always include safety advisories for severe weather (thunderstorms, heavy rain, extreme heat).
-4. Provide practical advice like carrying an umbrella, staying hydrated, etc.
-5. Be conversational and friendly.
-6. Format temperatures clearly with units.
-7. If a city is not found, ask the user to clarify or suggest nearby cities.
+2. Respond in {language} language. Match the user's language exactly (English or any Indian language). Preserve the native script (Devanagari, Tamil, Telugu, Bengali, etc.).
+3. Format your response using Markdown: use **bold** for key values, bullet lists and tables for multiple data points, and ## headings for sections. This makes it render nicely in the chat UI.
+4. Always include safety advisories for severe weather (thunderstorms, heavy rain, extreme heat).
+5. Provide practical advice like carrying an umbrella, staying hydrated, etc.
+6. Be conversational and friendly.
+7. Format temperatures clearly with units.
+8. If a city is not found, ask the user to clarify or suggest nearby cities.
 
 {f'User location context: {user_location}' if user_location else ''}
 """

@@ -6,6 +6,7 @@ export default function AnimatedContent({
   direction = 'up',
   distance = 24,
   className = '',
+  style,
 }) {
   const getInitial = () => {
     const base = { opacity: 0 }
@@ -26,6 +27,7 @@ export default function AnimatedContent({
         ease: [0.22, 1, 0.36, 1],
       }}
       className={className}
+      style={style}
     >
       {children}
     </motion.div>

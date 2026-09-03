@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion } from 'framer-motion'
+import { Mic, MicOff, Languages, Send, RotateCcw } from 'lucide-react'
 
 // onSendVoice(text) — called instead of invoking sendMessage directly here.
 // App.jsx stores the transcript and lets ChatView send it, so the response
@@ -11,9 +12,14 @@ export default function VoiceView({ onSendVoice }) {
   const [lang, setLang] = useState('en-IN')
   const recognitionRef = useRef(null)
 
+  const isSecure =
+    window.location.protocol === 'https:' ||
+    window.location.hostname === 'localhost' ||
+    window.location.hostname === '127.0.0.1'
+
   useEffect(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
-    if (!SpeechRecognition) {
+    if (!SpeechRecognition || !isSecure) {
       setSupported(false)
       return
     }
@@ -51,9 +57,6 @@ export default function VoiceView({ onSendVoice }) {
 
   const handleSendToChat = () => {
     if (!transcript.trim()) return
-    // Hand the transcript to App.jsx which routes it to ChatView for sending.
-    // Previously this called sendMessage() here and discarded the response,
-    // leaving the chat view empty after navigation.
     onSendVoice?.(transcript.trim())
     setTranscript('')
   }
@@ -74,18 +77,19 @@ export default function VoiceView({ onSendVoice }) {
   }
 
   return (
-    <div className="flex-1 flex flex-col items-center justify-center gap-8 px-6">
+    <div className="flex-1 flex flex-col items-center justify-center gap-6 sm:gap-8 px-6 pb-24">
       {/* Title */}
       <div className="text-center">
-        <h1 className="text-white text-2xl font-display font-bold mb-2">Voice Assistant</h1>
-        <p className="text-white/50">Speak your weather query</p>
+        <h1 className="text-white text-xl sm:text-2xl font-display font-bold mb-2">Voice Assistant</h1>
+        <p className="text-white/50 text-sm sm:text-base">Speak your weather query</p>
       </div>
 
       {/* Language Toggle */}
-      <div className="flex gap-2">
+      <div className="flex items-center gap-2">
+        <Languages className="text-white/40" size={18} />
         <button
           onClick={() => setLang('en-IN')}
-          className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${
+          className={`px-4 py-2 rounded-full text-sm font-medium transition-colors touch-target ${
             lang === 'en-IN' ? 'bg-accent text-white' : 'glass text-white/60'
           }`}
         >
@@ -93,7 +97,7 @@ export default function VoiceView({ onSendVoice }) {
         </button>
         <button
           onClick={() => setLang('hi-IN')}
-          className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${
+          className={`px-4 py-2 rounded-full text-sm font-medium transition-colors touch-target ${
             lang === 'hi-IN' ? 'bg-accent text-white' : 'glass text-white/60'
           }`}
         >
@@ -114,17 +118,22 @@ export default function VoiceView({ onSendVoice }) {
           onClick={toggleListening}
           whileHover={{ scale: 1.05 }}
           whileTap={{ scale: 0.95 }}
-          className={`w-32 h-32 rounded-full flex items-center justify-center transition-colors ${
+          aria-label={listening ? 'Stop listening' : 'Start listening'}
+          className={`w-24 h-24 sm:w-32 sm:h-32 rounded-full flex items-center justify-center transition-colors touch-target ${
             listening ? 'border-2 border-accent glass' : 'glass'
           }`}
         >
-          <span className="text-5xl">🎤</span>
+          {listening ? (
+            <MicOff className="text-red-400" size={44} />
+          ) : (
+            <Mic className="text-accent" size={44} />
+          )}
         </motion.button>
       </div>
 
       {/* Transcript */}
       <div className="glass rounded-2xl px-6 py-4 mx-4 min-h-16 w-full max-w-md text-center">
-        <p className={`text-lg ${transcript ? 'text-white' : 'text-white/30'}`}>
+        <p className={`text-base sm:text-lg ${transcript ? 'text-white' : 'text-white/30'}`}>
           {transcript || 'Tap the mic and speak...'}
         </p>
       </div>
@@ -134,15 +143,15 @@ export default function VoiceView({ onSendVoice }) {
         <div className="flex gap-3">
           <button
             onClick={handleSendToChat}
-            className="bg-accent rounded-xl px-6 py-3 text-white font-medium"
+            className="bg-accent rounded-xl px-6 py-3 text-white font-medium flex items-center gap-2 touch-target"
           >
-            Send to Chat
+            <Send size={16} /> Send to Chat
           </button>
           <button
             onClick={() => setTranscript('')}
-            className="glass rounded-xl px-6 py-3 text-white/70 font-medium"
+            className="glass rounded-xl px-6 py-3 text-white/70 font-medium flex items-center gap-2 touch-target"
           >
-            Clear
+            <RotateCcw size={16} /> Clear
           </button>
         </div>
       )}

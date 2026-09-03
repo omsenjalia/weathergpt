@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { Menu } from 'lucide-react'
 import Aurora from './components/bits/Aurora'
 import Sidebar from './components/Sidebar'
 import BottomDock from './components/BottomDock'
@@ -39,7 +40,7 @@ export default function App() {
   }
 
   return (
-    <div className="h-screen overflow-hidden relative">
+    <div className="h-screen h-[100dvh] overflow-hidden relative">
       {/* Aurora Background */}
       <Aurora />
 
@@ -55,7 +56,7 @@ export default function App() {
       />
 
       {/* Main Content */}
-      <div className="relative z-10 h-screen flex flex-col">
+      <div className="relative z-10 flex flex-col h-full">
         <AnimatePresence mode="wait">
           <motion.div
             key={activeView}
@@ -63,7 +64,7 @@ export default function App() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -12 }}
             transition={{ duration: 0.25 }}
-            className="flex-1 overflow-hidden flex flex-col"
+            className="flex-1 flex flex-col"
           >
             {views[activeView]}
           </motion.div>
@@ -77,9 +78,10 @@ export default function App() {
       {!sidebarOpen && (
         <button
           onClick={() => setSidebarOpen(true)}
-          className="fixed top-6 left-6 z-50 glass w-10 h-10 rounded-xl items-center justify-center cursor-pointer hidden md:flex"
+          aria-label="Open menu"
+          className="fixed top-6 left-6 z-50 glass w-11 h-11 rounded-xl items-center justify-center cursor-pointer hidden md:flex touch-target"
         >
-          <span className="text-white text-lg">☰</span>
+          <Menu className="text-white" size={22} />
         </button>
       )}
     </div>

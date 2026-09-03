@@ -13,6 +13,14 @@ def get_user_language(text: str) -> str:
             "bn": "Bengali",
             "te": "Telugu",
             "mr": "Marathi",
+            "kn": "Kannada",
+            "ml": "Malayalam",
+            "pa": "Punjabi",
+            "or": "Odia",
+            "ur": "Urdu",
+            "as": "Assamese",
+            "sa": "Sanskrit",
+            "ne": "Nepali",
             "en": "English",
         }
         return language_map.get(lang_code, "English")
