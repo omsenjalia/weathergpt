@@ -85,6 +85,7 @@ async function fetchWeatherAPI(lat, lon, key) {
       aqi: current.air_quality?.['us-epa-index'] ? current.air_quality['us-epa-index'] * 25 : null,
       pm25: current.air_quality?.pm2_5 ?? null,
       pm10: current.air_quality?.pm10 ?? null,
+      raw: res.data,
     }
   } catch (err) {
     console.warn('WeatherAPI fetch failed:', err.message)
@@ -112,6 +113,7 @@ async function fetchTomorrowIO(lat, lon, key) {
       windDirection: values.windDirection ?? 0,
       pressure: values.pressureSurfaceLevel ?? 1013,
       uvIndex: values.uvIndex ?? 0,
+      raw: res.data,
     }
   } catch (err) {
     console.warn('Tomorrow.io fetch failed:', err.message)
@@ -140,6 +142,7 @@ async function fetchOpenWeatherMap(lat, lon, key) {
       pressure: main.pressure,
       uvIndex: 0,
       condition: res.data.weather?.[0]?.description,
+      raw: res.data,
     }
   } catch (err) {
     console.warn('OpenWeatherMap fetch failed:', err.message)
@@ -184,6 +187,7 @@ async function fetchAccuWeather(lat, lon, key) {
       pressure: data.Pressure?.Metric?.Value,
       uvIndex: data.UVIndex ?? 0,
       condition: data.WeatherText,
+      raw: condRes.data,
     }
   } catch (err) {
     console.warn('AccuWeather fetch failed:', err.message)

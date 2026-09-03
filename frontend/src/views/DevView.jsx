@@ -20,6 +20,9 @@ import {
   Sliders,
   Globe2,
   AlertTriangle,
+  GitMerge,
+  ArrowRight,
+  FileCode,
 } from 'lucide-react'
 import { getDevDiagnostics, runSandboxPrompt } from '../api'
 import { getEnsembleWeather } from '../utils/ensembleEngine'
@@ -43,6 +46,7 @@ export default function DevView({ location, language }) {
   const [testingEnsemble, setTestingEnsemble] = useState(false)
   const [expandedJson, setExpandedJson] = useState({})
   const [activeTab, setActiveTab] = useState('overview')
+  const [selectedRawProvider, setSelectedRawProvider] = useState(null)
 
   // AI Sandbox state
   const [sandboxPrompt, setSandboxPrompt] = useState('Will it rain in Ahmedabad this week?')
@@ -76,6 +80,7 @@ export default function DevView({ location, language }) {
 
   useEffect(() => {
     fetchDiagnostics()
+    runEnsembleTest()
   }, [])
 
   const runLatencyTest = async (type) => {
@@ -247,7 +252,7 @@ export default function DevView({ location, language }) {
                 </span>
               </div>
               <p className="text-white/60 text-xs md:text-sm mt-0.5">
-                Real-time backend telemetry, AI prompt sandbox, IMD simulator & ensemble inspector
+                Real-time telemetry, visual data pipeline model, raw JSON inspector & AI prompt sandbox
               </p>
             </div>
           </div>
@@ -352,6 +357,7 @@ export default function DevView({ location, language }) {
         <div className="flex items-center gap-2 border-b border-white/10 pb-3 overflow-x-auto no-scrollbar">
           {[
             { id: 'overview', label: 'Overview & Telemetry', icon: Activity },
+            { id: 'pipeline', label: 'Data Pipeline & Raw JSON Model', icon: GitMerge },
             { id: 'sandbox', label: 'AI Agent Sandbox', icon: Play },
             { id: 'simulator', label: 'Hazard Advisory Simulator', icon: Sliders },
             { id: 'stress', label: 'Multi-City Stress Tester', icon: Globe2 },
@@ -459,7 +465,150 @@ export default function DevView({ location, language }) {
           </div>
         )}
 
-        {/* TAB 2: AI AGENT SANDBOX */}
+        {/* TAB 2: VISUAL DATA PIPELINE MODEL & RAW JSON INSPECTOR */}
+        {activeTab === 'pipeline' && (
+          <div className="flex flex-col gap-8">
+            <div className="glass rounded-3xl p-6 border border-accent/40 bg-black/40">
+              <h3 className="text-white font-bold font-display text-base uppercase tracking-wider flex items-center gap-2 mb-2">
+                <GitMerge size={20} className="text-accent" /> Live Architecture Data Pipeline Model
+              </h3>
+              <p className="text-white/60 text-xs leading-relaxed">
+                Visual step-by-step model illustrating concurrent API provider ingestion, weighting algorithms, max-risk decision voting, and raw JSON response inspection.
+              </p>
+            </div>
+
+            {/* Pipeline Stage 1: Concurrent Provider Ingestion */}
+            <div className="flex flex-col gap-4">
+              <div className="flex items-center gap-2">
+                <span className="w-6 h-6 rounded-full bg-accent text-white font-bold text-xs flex items-center justify-center font-mono">1</span>
+                <h4 className="text-white font-bold text-sm uppercase tracking-wider font-display">
+                  Concurrent Provider Ingestion Layer
+                </h4>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                {[
+                  { name: 'Open-Meteo (ECMWF)', key: 'openmeteo', weight: '1.0', active: true },
+                  { name: 'WeatherAPI.com', key: 'weatherapi', weight: '1.2', active: !!ensembleData?.providersUsed?.some((p) => p.name.includes('WeatherAPI')) },
+                  { name: 'Tomorrow.io', key: 'tomorrow', weight: '1.2', active: !!ensembleData?.providersUsed?.some((p) => p.name.includes('Tomorrow')) },
+                  { name: 'OpenWeatherMap', key: 'openweather', weight: '1.1', active: !!ensembleData?.providersUsed?.some((p) => p.name.includes('OpenWeather')) },
+                  { name: 'AccuWeather', key: 'accuweather', weight: '1.25', active: !!ensembleData?.providersUsed?.some((p) => p.name.includes('AccuWeather')) },
+                ].map((p, i) => {
+                  const providerObj = ensembleData?.providersUsed?.find((used) => used.name.toLowerCase().includes(p.key.toLowerCase())) || (p.key === 'openmeteo' ? ensembleData?.providersUsed?.[0] : null)
+                  return (
+                    <div
+                      key={i}
+                      className={`glass rounded-2xl p-4 border flex flex-col justify-between transition-all ${
+                        p.active ? 'border-emerald-500/50 bg-emerald-500/10' : 'border-white/10 bg-white/5 opacity-60'
+                      }`}
+                    >
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-xs font-bold text-white truncate">{p.name}</span>
+                          <span className="text-[10px] bg-accent/20 text-accent font-semibold px-2 py-0.5 rounded-full font-mono">W: {p.weight}</span>
+                        </div>
+
+                        {providerObj ? (
+                          <div className="text-xs font-mono flex flex-col gap-1 text-emerald-300">
+                            <span>Temp: {providerObj.temp}°C</span>
+                            <span>Feels: {providerObj.feelsLike}°C</span>
+                          </div>
+                        ) : (
+                          <span className="text-[11px] text-white/40 italic">Key Not Configured</span>
+                        )}
+                      </div>
+
+                      <button
+                        onClick={() => setSelectedRawProvider(providerObj || { name: p.name, raw: { note: 'No key provided for this provider in .env' } })}
+                        className="mt-3 bg-white/10 hover:bg-white/20 text-white text-[11px] font-semibold py-1.5 rounded-xl flex items-center justify-center gap-1 cursor-pointer transition-all border border-white/15"
+                      >
+                        <FileCode size={12} className="text-accent" />
+                        <span>View Raw JSON</span>
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+
+            {/* Pipeline Stage 2: Weighting & Fusion Math Engine */}
+            <div className="flex flex-col gap-4">
+              <div className="flex items-center gap-2">
+                <span className="w-6 h-6 rounded-full bg-amber-400 text-black font-bold text-xs flex items-center justify-center font-mono">2</span>
+                <h4 className="text-white font-bold text-sm uppercase tracking-wider font-display">
+                  Mathematical Fusion & Weighting Engine
+                </h4>
+              </div>
+
+              <div className="glass rounded-3xl p-6 border border-amber-500/30 bg-amber-500/5 flex flex-col gap-4 font-mono text-xs">
+                <div className="p-4 bg-black/60 rounded-2xl border border-white/10 text-amber-300">
+                  <p className="font-bold text-white mb-1 font-sans text-sm">Weighted Average Formula:</p>
+                  <p className="text-emerald-300">Fused Temperature = Σ ( Temp_i × Weight_i ) / Σ ( Weight_i )</p>
+                </div>
+
+                {ensembleData?.providersUsed?.length > 0 && (
+                  <div className="flex flex-col gap-2">
+                    <span className="text-white/60 font-sans font-semibold">Live Weighted Calculation Trace:</span>
+                    <div className="glass rounded-2xl p-4 bg-black/40 border border-white/10 text-white/80 space-y-1">
+                      {ensembleData.providersUsed.map((p, i) => (
+                        <div key={i} className="flex justify-between text-[11px]">
+                          <span>{p.name}: {p.temp}°C × {p.weight} = {(p.temp * p.weight).toFixed(2)}</span>
+                          <span className="text-emerald-400">Weight: {p.weight}</span>
+                        </div>
+                      ))}
+                      <div className="pt-2 border-t border-white/10 flex justify-between font-bold text-emerald-300 text-xs">
+                        <span>Fused Output Result:</span>
+                        <span>{ensembleData.fused?.temp}°C</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Pipeline Stage 3: Synthesized Output JSON */}
+            <div className="flex flex-col gap-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="w-6 h-6 rounded-full bg-emerald-400 text-black font-bold text-xs flex items-center justify-center font-mono">3</span>
+                  <h4 className="text-white font-bold text-sm uppercase tracking-wider font-display">
+                    Final Synthesized Telemetry Stream (JSON)
+                  </h4>
+                </div>
+              </div>
+
+              <pre className="text-xs font-mono text-emerald-300 bg-black/80 rounded-3xl p-6 overflow-x-auto border border-white/15 shadow-2xl max-h-96">
+                {JSON.stringify(ensembleData?.fused || ensembleData, null, 2)}
+              </pre>
+            </div>
+          </div>
+        )}
+
+        {/* RAW PROVIDER JSON MODAL */}
+        {selectedRawProvider && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-md">
+            <div className="glass rounded-3xl p-6 border border-accent/40 bg-[#0d0b1a] max-w-3xl w-full max-h-[85vh] flex flex-col gap-4 shadow-2xl">
+              <div className="flex items-center justify-between pb-3 border-b border-white/10">
+                <div className="flex items-center gap-2">
+                  <FileCode size={18} className="text-accent" />
+                  <h3 className="text-white font-bold font-display text-sm uppercase">{selectedRawProvider.name} Raw JSON Payload</h3>
+                </div>
+                <button
+                  onClick={() => setSelectedRawProvider(null)}
+                  className="text-white/50 hover:text-white text-xs font-mono px-3 py-1 glass rounded-xl border border-white/15 cursor-pointer"
+                >
+                  ✕ Close
+                </button>
+              </div>
+
+              <pre className="text-xs font-mono text-emerald-300 bg-black/80 rounded-2xl p-5 overflow-y-auto max-h-[60vh] border border-white/10 no-scrollbar">
+                {JSON.stringify(selectedRawProvider.raw || selectedRawProvider, null, 2)}
+              </pre>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 3: AI AGENT SANDBOX */}
         {activeTab === 'sandbox' && (
           <div className="flex flex-col gap-6">
             <div className="glass rounded-3xl p-6 border border-white/10 flex flex-col gap-4">
@@ -524,7 +673,7 @@ export default function DevView({ location, language }) {
           </div>
         )}
 
-        {/* TAB 3: HAZARD SIMULATOR */}
+        {/* TAB 4: HAZARD SIMULATOR */}
         {activeTab === 'simulator' && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             <div className="lg:col-span-6 glass rounded-3xl p-6 border border-white/10 flex flex-col gap-5">
@@ -600,7 +749,7 @@ export default function DevView({ location, language }) {
           </div>
         )}
 
-        {/* TAB 4: STRESS TESTER */}
+        {/* TAB 5: STRESS TESTER */}
         {activeTab === 'stress' && (
           <div className="flex flex-col gap-6">
             <div className="glass rounded-3xl p-6 border border-white/10 flex items-center justify-between gap-4">
@@ -648,7 +797,7 @@ export default function DevView({ location, language }) {
           </div>
         )}
 
-        {/* TAB 5: ENDPOINT TESTER */}
+        {/* TAB 6: ENDPOINT TESTER */}
         {activeTab === 'endpoints' && (
           <div className="flex flex-col gap-6">
             <div className="glass rounded-3xl p-6 border border-white/10 flex flex-col gap-4">
@@ -709,7 +858,7 @@ export default function DevView({ location, language }) {
           </div>
         )}
 
-        {/* TAB 6: ENSEMBLE INSPECTOR */}
+        {/* TAB 7: ENSEMBLE INSPECTOR */}
         {activeTab === 'ensemble' && (
           <div className="flex flex-col gap-6">
             <div className="glass rounded-3xl p-6 border border-white/10 flex items-center justify-between gap-4">
@@ -760,7 +909,7 @@ export default function DevView({ location, language }) {
           </div>
         )}
 
-        {/* TAB 7: CLIENT STORAGE & GEO */}
+        {/* TAB 8: CLIENT STORAGE & GEO */}
         {activeTab === 'storage' && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             <div className="lg:col-span-6 glass rounded-3xl p-6 border border-white/10 flex flex-col gap-3">
@@ -783,7 +932,7 @@ export default function DevView({ location, language }) {
           </div>
         )}
 
-        {/* TAB 8: SYSTEM LOGS */}
+        {/* TAB 9: SYSTEM LOGS */}
         {activeTab === 'logs' && (
           <div className="glass rounded-3xl p-6 border border-white/15 bg-black/50 shadow-2xl flex flex-col gap-3">
             <h3 className="text-white font-bold font-display text-sm uppercase tracking-wider flex items-center gap-2 mb-2">
