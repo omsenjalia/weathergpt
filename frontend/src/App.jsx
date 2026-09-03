@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { MapPin, ChevronDown, Languages, Menu, X, Sun, MessageSquare, Map } from 'lucide-react'
+import { MapPin, ChevronDown, Languages, Menu, X, Sun, MessageSquare, Map, Terminal } from 'lucide-react'
 import Aurora from './components/bits/Aurora'
 import Sidebar from './components/Sidebar'
 import LocationPickerModal from './components/LocationPickerModal'
@@ -8,6 +8,7 @@ import LanguagePickerModal, { INDIAN_LANGUAGES } from './components/LanguagePick
 import WeatherHome from './views/WeatherHome'
 import ChatView from './views/ChatView'
 import MapView from './views/MapView'
+import DevView from './views/DevView'
 
 const DEFAULT_LOCATION = {
   name: 'New Delhi',
@@ -20,6 +21,7 @@ const mobileNavItems = [
   { id: 'home', icon: Sun, label: 'Weather' },
   { id: 'chat', icon: MessageSquare, label: 'Chat' },
   { id: 'map', icon: Map, label: 'Map' },
+  { id: 'dev', icon: Terminal, label: 'Developer' },
 ]
 
 export default function App() {
@@ -32,6 +34,22 @@ export default function App() {
 
   // Lifted state: keeps Chat history alive across view switches.
   const [chatMessages, setChatMessages] = useState([])
+
+  // Check URL path for /dev or shortcut listener
+  useEffect(() => {
+    if (window.location.pathname === '/dev') {
+      setActiveView('dev')
+    }
+
+    const handleKeyDown = (e) => {
+      if (e.shiftKey && (e.key === 'D' || e.key === 'd')) {
+        e.preventDefault()
+        setActiveView((prev) => (prev === 'dev' ? 'home' : 'dev'))
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
 
   // Load saved location & language on mount
   useEffect(() => {
@@ -121,6 +139,7 @@ export default function App() {
       />
     ),
     map: <MapView location={location} />,
+    dev: <DevView location={location} language={language} />,
   }
 
   return (

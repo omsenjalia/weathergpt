@@ -22,6 +22,11 @@ export async function sendMessage(messagesPayload, location = '', language = 'En
   return res.data.response;
 }
 
+export async function getDevDiagnostics() {
+  const res = await axios.get(`${API_BASE}/dev`, { timeout: 5000 });
+  return res.data;
+}
+
 export async function getWeatherByCoords(lat, lon, days = 14) {
   const ensemble = await getEnsembleWeather(lat, lon, days);
   const raw = ensemble.rawOpenMeteo || {};

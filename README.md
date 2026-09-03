@@ -16,7 +16,7 @@ A premium dark glassmorphism weather assistant for India featuring conversationa
 - **Simple Key Configuration** — Configure optional provider keys easily via environment variables (`.env`).
 - **Conversational AI Weather** — Ask about weather in any Indian city in English, Hindi, Gujarati, Tamil, Bengali, Telugu, Marathi, Kannada, Malayalam, Punjabi, etc.
 - **Fully Accessible Mobile UX** — Header hamburger navigation drawer + floating bottom dock (auto-hides on Chat view for unobstructed chat input).
-- **Official IMD Hazard Advisories** — Evaluates live weather telemetry against India Meteorological Department (IMD) Red, Orange, and Yellow alert criteria.
+- **Developer Telemetry Dashboard (`/dev`)** — Comprehensive diagnostics control panel accessible via `/dev` URL or `Shift + D` key shortcut. Displays server uptime, memory/CPU usage, API latency benchmarker, multi-provider ensemble debugger, and live error log console.
 - **Live Animated Weather Map** — Windy.com map integration for real-time wind and radar visualization.
 
 ---
