@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { getEnsembleWeather } from './utils/ensembleEngine';
 
 // Falls back to localhost for local development. Set VITE_API_URL in .env for
 // staging / production deployments.
@@ -22,19 +23,27 @@ export async function sendMessage(messagesPayload, location = '', language = 'En
 }
 
 export async function getWeatherByCoords(lat, lon, days = 14) {
-  const res = await axios.get('https://api.open-meteo.com/v1/forecast', {
-    params: {
-      latitude: lat,
-      longitude: lon,
-      current: 'temperature_2m,apparent_temperature,wind_speed_10m,wind_direction_10m,precipitation,relative_humidity_2m,weather_code,surface_pressure,uv_index',
-      hourly: 'temperature_2m,apparent_temperature,precipitation_probability,weather_code,wind_speed_10m,wind_direction_10m,relative_humidity_2m,uv_index',
-      daily: 'temperature_2m_max,temperature_2m_min,rain_sum,precipitation_probability_max,weather_code,sunrise,sunset,uv_index_max',
-      forecast_days: days,
-      alerts: true,
-      timezone: 'auto',
-    }
-  });
-  return res.data;
+  const ensemble = await getEnsembleWeather(lat, lon, days);
+  const raw = ensemble.rawOpenMeteo || {};
+
+  // Fuse current weather metrics
+  const current = {
+    ...(raw.current || {}),
+    temperature_2m: ensemble.fused.temp,
+    apparent_temperature: ensemble.fused.feelsLike,
+    relative_humidity_2m: ensemble.fused.humidity,
+    wind_speed_10m: ensemble.fused.windSpeed,
+    wind_direction_10m: ensemble.fused.windDirection,
+    surface_pressure: ensemble.fused.pressure,
+    uv_index: ensemble.fused.uvIndex,
+    weather_code: ensemble.fused.code,
+  };
+
+  return {
+    ...raw,
+    current,
+    providersUsed: ensemble.providersUsed,
+  };
 }
 
 export function getIMDAlertBulletin(currentWeather, dailyForecast) {

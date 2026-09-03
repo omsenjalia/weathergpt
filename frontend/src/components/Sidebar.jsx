@@ -1,4 +1,4 @@
-import { Sun, MessageSquare, Map, MapPin, Languages } from 'lucide-react'
+import { Sun, MessageSquare, Map, MapPin, Languages, Key } from 'lucide-react'
 import { Translations } from '../utils/translations'
 
 const navItems = [
@@ -14,6 +14,7 @@ export default function Sidebar({
   onOpenLocationPicker,
   language,
   onOpenLanguagePicker,
+  onOpenApiSettings,
 }) {
   const langCode = language?.code || 'en'
 
@@ -55,7 +56,7 @@ export default function Sidebar({
         </nav>
       </div>
 
-      {/* Location & Language Controls */}
+      {/* Location & Language & API Settings Controls */}
       <div className="flex flex-col gap-2.5">
         {location && (
           <button
@@ -89,13 +90,27 @@ export default function Sidebar({
           </button>
         )}
 
+        <button
+          onClick={onOpenApiSettings}
+          className="glass rounded-2xl p-3 border border-white/10 flex items-center justify-between text-left hover:bg-white/10 transition-all cursor-pointer"
+        >
+          <div className="flex items-center gap-2">
+            <Key size={16} className="text-accent flex-shrink-0" />
+            <div>
+              <p className="text-white text-xs font-bold">API Settings</p>
+              <p className="text-white/40 text-[10px]">Multi-Source Fusion</p>
+            </div>
+          </div>
+          <span className="text-[10px] text-accent font-semibold underline">Manage</span>
+        </button>
+
         <div className="glass rounded-2xl p-3 border border-white/10">
           <div className="flex items-center justify-between mb-1">
-            <span className="text-accent text-[10px] font-semibold uppercase tracking-wider">Multilingual AI</span>
+            <span className="text-accent text-[10px] font-semibold uppercase tracking-wider">Ensemble Weather</span>
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
           </div>
           <p className="text-white/50 text-[11px] leading-relaxed">
-            10 Indian Languages Supported
+            Multi-Provider Real-Time Fusion
           </p>
         </div>
       </div>

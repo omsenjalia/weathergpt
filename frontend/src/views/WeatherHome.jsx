@@ -153,6 +153,7 @@ export default function WeatherHome({ location, language, onOpenLocationPicker }
         pm25: aqiData?.current?.pm2_5 ?? null,
         pm10: aqiData?.current?.pm10 ?? null,
         no2: aqiData?.current?.nitrogen_dioxide ?? null,
+        providersUsed: data.providersUsed || [],
       })
 
       const daily = data.daily
@@ -242,7 +243,7 @@ export default function WeatherHome({ location, language, onOpenLocationPicker }
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden relative">
-      {/* Search & Location Bar */}
+      {/* Header & Location Bar */}
       <div className="glass border-b border-white/10 px-4 py-3 flex-shrink-0 z-20">
         <div className="max-w-6xl mx-auto flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
@@ -256,24 +257,12 @@ export default function WeatherHome({ location, language, onOpenLocationPicker }
             </button>
           </div>
 
-          <div className="flex items-center gap-2 flex-1 max-w-xs sm:max-w-sm">
-            <div className="relative w-full">
-              <input
-                value={cityInput}
-                onChange={(e) => setCityInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-                placeholder={t('searchCityPlaceholder')}
-                className="w-full bg-white/5 border border-white/15 rounded-2xl pl-10 pr-4 py-2 text-white text-sm placeholder:text-white/40 focus:outline-none focus:ring-1 focus:ring-accent/60"
-              />
-              <Search size={16} className="absolute left-3.5 top-3 text-white/40" />
-            </div>
-            <button
-              onClick={onOpenLocationPicker}
-              className="bg-accent hover:bg-accent/90 text-white rounded-2xl px-3.5 py-2 text-xs md:text-sm font-semibold transition-all shadow-sm cursor-pointer whitespace-nowrap"
-            >
-              {t('change')}
-            </button>
-          </div>
+          <button
+            onClick={onOpenLocationPicker}
+            className="bg-accent hover:bg-accent/90 text-white rounded-2xl px-3.5 py-2 text-xs md:text-sm font-semibold transition-all shadow-sm cursor-pointer whitespace-nowrap"
+          >
+            {t('change')}
+          </button>
         </div>
 
         {/* Favorites Quick Chips Bar */}
@@ -290,6 +279,24 @@ export default function WeatherHome({ location, language, onOpenLocationPicker }
               >
                 <span>{f.name}</span>
               </button>
+            ))}
+          </div>
+        )}
+
+        {/* Active Ensemble Telemetry Sources Chip Bar */}
+        {weather?.providersUsed?.length > 0 && (
+          <div className="max-w-6xl mx-auto mt-2 pt-2 border-t border-white/10 flex items-center gap-2 overflow-x-auto no-scrollbar text-xs">
+            <span className="text-[10px] uppercase font-bold text-emerald-400 tracking-wider flex items-center gap-1 flex-shrink-0">
+              <Activity size={12} className="text-emerald-400" /> Fused Telemetry ({weather.providersUsed.length}):
+            </span>
+            {weather.providersUsed.map((p, i) => (
+              <span
+                key={i}
+                className="glass rounded-full px-2.5 py-0.5 text-[11px] text-white/90 bg-white/5 border border-white/15 flex items-center gap-1 flex-shrink-0"
+              >
+                <span className="font-semibold">{p.name}</span>
+                <span className="text-white/40">({p.temp}°C)</span>
+              </span>
             ))}
           </div>
         )}

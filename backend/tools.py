@@ -88,34 +88,105 @@ def geocode_city(city_name: str) -> dict:
         return {"error": str(e)}
 
 
+import os
+
 @tool
 def get_current_weather(latitude: float, longitude: float) -> dict:
-    """Get current weather conditions. Call geocode_city first for coordinates."""
+    """Get current weather conditions using multi-source telemetry fusion (Open-Meteo, WeatherAPI, Tomorrow.io, OpenWeather, AccuWeather). Call geocode_city first for coordinates."""
     try:
+        sources = []
         with httpx.Client(timeout=10) as client:
-            response = client.get(
-                "https://api.open-meteo.com/v1/forecast",
-                params={
-                    "latitude": latitude,
-                    "longitude": longitude,
-                    # Use the current variable name; also accepted as 'weathercode'
-                    "current": "temperature_2m,apparent_temperature,wind_speed_10m,precipitation,relative_humidity_2m,weather_code",
-                    "timezone": "auto",
-                },
-            )
-            data = response.json()
-            current = data.get("current", {})
-            weather_code = _extract_weather_code(current)
-            condition = WEATHER_CODES.get(weather_code, "Unknown")
-            return {
-                "temperature_2m": current.get("temperature_2m"),
-                "apparent_temperature": current.get("apparent_temperature"),
-                "wind_speed_10m": current.get("wind_speed_10m"),
-                "precipitation": current.get("precipitation"),
-                "relative_humidity_2m": current.get("relative_humidity_2m"),
-                "weathercode": weather_code,
-                "condition": condition,
-            }
+            # 1. Base Open-Meteo
+            try:
+                res = client.get(
+                    "https://api.open-meteo.com/v1/forecast",
+                    params={
+                        "latitude": latitude,
+                        "longitude": longitude,
+                        "current": "temperature_2m,apparent_temperature,wind_speed_10m,precipitation,relative_humidity_2m,weather_code",
+                        "timezone": "auto",
+                    },
+                )
+                data = res.json()
+                current = data.get("current", {})
+                w_code = _extract_weather_code(current)
+                sources.append({
+                    "name": "Open-Meteo (ECMWF)",
+                    "temp": current.get("temperature_2m"),
+                    "feelsLike": current.get("apparent_temperature"),
+                    "humidity": current.get("relative_humidity_2m"),
+                    "windSpeed": current.get("wind_speed_10m"),
+                    "code": w_code,
+                    "condition": WEATHER_CODES.get(w_code, "Unknown"),
+                    "weight": 1.0,
+                })
+            except Exception:
+                pass
+
+            # 2. WeatherAPI.com
+            wapi_key = os.getenv("WEATHERAPI_KEY") or os.getenv("VITE_WEATHERAPI_KEY")
+            if wapi_key:
+                try:
+                    res = client.get(
+                        "https://api.weatherapi.com/v1/current.json",
+                        params={"key": wapi_key, "q": f"{latitude},{longitude}"},
+                    )
+                    curr = res.json().get("current", {})
+                    if "temp_c" in curr:
+                        sources.append({
+                            "name": "WeatherAPI.com",
+                            "temp": curr.get("temp_c"),
+                            "feelsLike": curr.get("feelslike_c"),
+                            "humidity": curr.get("humidity"),
+                            "windSpeed": curr.get("wind_kph"),
+                            "condition": curr.get("condition", {}).get("text"),
+                            "weight": 1.2,
+                        })
+                except Exception:
+                    pass
+
+            # 3. OpenWeatherMap
+            owm_key = os.getenv("OPENWEATHER_KEY") or os.getenv("VITE_OPENWEATHER_KEY")
+            if owm_key:
+                try:
+                    res = client.get(
+                        "https://api.openweathermap.org/data/2.5/weather",
+                        params={"lat": latitude, "lon": longitude, "appid": owm_key, "units": "metric"},
+                    )
+                    main = res.json().get("main", {})
+                    if "temp" in main:
+                        sources.append({
+                            "name": "OpenWeatherMap",
+                            "temp": main.get("temp"),
+                            "feelsLike": main.get("feels_like"),
+                            "humidity": main.get("humidity"),
+                            "windSpeed": res.json().get("wind", {}).get("speed", 0) * 3.6,
+                            "condition": res.json().get("weather", [{}])[0].get("description"),
+                            "weight": 1.1,
+                        })
+                except Exception:
+                    pass
+
+        if not sources:
+            return {"error": "Failed to retrieve weather data from providers"}
+
+        # Compute weighted averages
+        total_w = sum(s["weight"] for s in sources if s.get("temp") is not None)
+        weighted_temp = sum(s["temp"] * s["weight"] for s in sources if s.get("temp") is not None) / total_w if total_w > 0 else sources[0]["temp"]
+        weighted_feels = sum((s.get("feelsLike") or s["temp"]) * s["weight"] for s in sources if s.get("temp") is not None) / total_w if total_w > 0 else weighted_temp
+        weighted_humidity = sum((s.get("humidity") or 50) * s["weight"] for s in sources if s.get("temp") is not None) / total_w if total_w > 0 else 50
+        weighted_wind = sum((s.get("windSpeed") or 0) * s["weight"] for s in sources if s.get("temp") is not None) / total_w if total_w > 0 else 0
+
+        base = sources[0]
+        return {
+            "temperature_2m": round(weighted_temp, 1),
+            "apparent_temperature": round(weighted_feels, 1),
+            "relative_humidity_2m": round(weighted_humidity),
+            "wind_speed_10m": round(weighted_wind, 1),
+            "weathercode": base.get("code", 0),
+            "condition": base.get("condition", "Normal"),
+            "providers_used": [s["name"] for s in sources],
+        }
     except Exception as e:
         return {"error": str(e)}
 
