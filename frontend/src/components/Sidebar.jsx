@@ -91,11 +91,11 @@ export default function Sidebar({
 
         <div className="glass rounded-2xl p-3 border border-white/10">
           <div className="flex items-center justify-between mb-1">
-            <span className="text-accent text-[10px] font-semibold uppercase tracking-wider">Ensemble Weather</span>
+            <span className="text-accent text-[10px] font-semibold uppercase tracking-wider">Multilingual AI</span>
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
           </div>
           <p className="text-white/50 text-[11px] leading-relaxed">
-            Multi-Provider Real-Time Fusion
+            10 Indian Languages Supported
           </p>
         </div>
       </div>
