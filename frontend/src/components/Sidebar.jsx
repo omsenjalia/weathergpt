@@ -126,7 +126,6 @@ export default function Sidebar({
           </span>
           {[
             { id: 'home', label: Translations.get(langCode, 'navWeather') || 'Weather' },
-            { id: 'imd', label: 'IMD Official Hub (28 APIs)', badge: 'Priority 1' },
             { id: 'map', label: Translations.get(langCode, 'navMap') || 'Map' },
             { id: 'architecture', label: 'Architecture Map' },
             { id: 'dev', label: Translations.get(langCode, 'navDev') || 'Developer' },
