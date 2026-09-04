@@ -1,16 +1,13 @@
 import { useState, useEffect } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
-import { MapPin, ChevronDown, Languages, Menu, X, Sun, MessageSquare, Map, Terminal } from 'lucide-react'
-import Aurora from './components/bits/Aurora'
+import { Menu, Sun } from 'lucide-react'
 import Sidebar from './components/Sidebar'
 import LocationPickerModal from './components/LocationPickerModal'
 import LanguagePickerModal, { INDIAN_LANGUAGES } from './components/LanguagePickerModal'
-import WeatherHome from './views/WeatherHome'
-import ChatView from './views/ChatView'
+import WeatherChatView from './views/WeatherChatView'
 import MapView from './views/MapView'
 import DevView from './views/DevView'
+import ExcalidrawArchitectureView from './views/ExcalidrawArchitectureView'
 import { autoDetectUserLocation } from './utils/location'
-import { Translations } from './utils/translations'
 
 const DEFAULT_LOCATION = {
   name: 'New Delhi',
@@ -19,41 +16,42 @@ const DEFAULT_LOCATION = {
   lon: 77.209,
 }
 
-const mobileNavItems = [
-  { id: 'home', icon: Sun, label: 'Weather', translationKey: 'navWeather' },
-  { id: 'chat', icon: MessageSquare, label: 'Chat', translationKey: 'navChat' },
-  { id: 'map', icon: Map, label: 'Map', translationKey: 'navMap' },
-  { id: 'dev', icon: Terminal, label: 'Developer', translationKey: 'navDev' },
-]
-
 export default function App() {
   const [activeView, setActiveView] = useState('home')
   const [location, setLocation] = useState(DEFAULT_LOCATION)
-  const [language, setLanguage] = useState(INDIAN_LANGUAGES[0]) // Default English
+  const [language, setLanguage] = useState(INDIAN_LANGUAGES[0])
   const [isLocationModalOpen, setIsLocationModalOpen] = useState(false)
   const [isLanguageModalOpen, setIsLanguageModalOpen] = useState(false)
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
-
-  // Lifted state: keeps Chat history alive across view switches.
-  const [chatMessages, setChatMessages] = useState([])
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [favorites, setFavorites] = useState([])
+  const [farmerMode, setFarmerMode] = useState(false)
+  const [selectedCrop, setSelectedCrop] = useState('Cotton')
 
   // Check URL path for /dev or shortcut listener
   useEffect(() => {
     if (window.location.pathname === '/dev') {
       setActiveView('dev')
+    } else if (window.location.pathname === '/architecture') {
+      setActiveView('architecture')
     }
 
     const handleKeyDown = (e) => {
+      // Shift+D toggles dev view
       if (e.shiftKey && (e.key === 'D' || e.key === 'd')) {
         e.preventDefault()
         setActiveView((prev) => (prev === 'dev' ? 'home' : 'dev'))
+      }
+      // ⌘K / Ctrl+K starts new chat (goes home)
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault()
+        setActiveView('home')
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
 
-  // Load saved location & language on mount, or auto-detect location
+  // Load saved settings on mount
   useEffect(() => {
     try {
       const savedLang = localStorage.getItem('weathergpt_language')
@@ -67,12 +65,31 @@ export default function App() {
       // Ignore parse errors
     }
 
-    // Auto-detect user location via GPS or IP fallback
+    try {
+      const savedFavs = localStorage.getItem('weathergpt_favorites')
+      if (savedFavs) {
+        setFavorites(JSON.parse(savedFavs))
+      }
+    } catch {
+      // Ignore
+    }
+
+    // Auto-detect user location
     autoDetectUserLocation().then((detectedLoc) => {
       if (detectedLoc) {
         setLocation(detectedLoc)
       }
     })
+  }, [])
+
+  // Close sidebar when screen becomes desktop-sized
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 768px)')
+    const handler = (e) => {
+      if (e.matches) setSidebarOpen(false)
+    }
+    mq.addEventListener('change', handler)
+    return () => mq.removeEventListener('change', handler)
   }, [])
 
   const handleSelectLocation = (newLoc) => {
@@ -93,32 +110,32 @@ export default function App() {
     }
   }
 
-  const views = {
-    home: (
-      <WeatherHome
-        location={location}
-        language={language}
-        onOpenLocationPicker={() => setIsLocationModalOpen(true)}
-      />
-    ),
-    chat: (
-      <ChatView
-        messages={chatMessages}
-        setMessages={setChatMessages}
-        location={location}
-        language={language}
-      />
-    ),
-    map: <MapView location={location} language={language} />,
-    dev: <DevView location={location} language={language} />,
+  const renderView = () => {
+    switch (activeView) {
+      case 'map':
+        return <MapView location={location} language={language} />
+      case 'dev':
+        return <DevView location={location} language={language} />
+      case 'architecture':
+        return <ExcalidrawArchitectureView />
+      case 'home':
+      default:
+        return (
+          <WeatherChatView
+            location={location}
+            language={language}
+            favorites={favorites}
+            onSelectLocation={handleSelectLocation}
+            farmerMode={farmerMode}
+            selectedCrop={selectedCrop}
+          />
+        )
+    }
   }
 
   return (
-    <div className="h-screen h-[100dvh] overflow-hidden relative flex bg-[#0d0b1a]">
-      {/* Aurora Background */}
-      <Aurora />
-
-      {/* Persistent Sidebar — desktop screen */}
+    <div className="flex h-screen w-screen overflow-hidden bg-black text-white font-sans">
+      {/* Sidebar */}
       <Sidebar
         activeView={activeView}
         onNavigate={setActiveView}
@@ -126,94 +143,44 @@ export default function App() {
         onOpenLocationPicker={() => setIsLocationModalOpen(true)}
         language={language}
         onOpenLanguagePicker={() => setIsLanguageModalOpen(true)}
+        favorites={favorites}
+        sidebarOpen={sidebarOpen}
+        onCloseSidebar={() => setSidebarOpen(false)}
+        farmerMode={farmerMode}
+        onToggleFarmerMode={() => setFarmerMode((prev) => !prev)}
+        selectedCrop={selectedCrop}
+        onSelectCrop={setSelectedCrop}
       />
 
-      {/* Main Content Area */}
-      <div className="relative z-10 flex-1 flex flex-col h-full overflow-hidden">
-        {/* Universal Header Bar */}
-        <header className="glass border-b border-white/10 px-4 py-2.5 flex items-center justify-between flex-shrink-0 z-30 relative">
-          <div className="flex items-center gap-2">
-            {/* Mobile Hamburger Menu Button */}
-            <button
-              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-              className="md:hidden glass hover:bg-white/15 p-2 rounded-2xl text-white border border-white/15 cursor-pointer transition-all shadow-sm flex items-center justify-center"
-              aria-label="Toggle navigation menu"
-            >
-              {isMobileMenuOpen ? <X size={18} className="text-accent" /> : <Menu size={18} className="text-white" />}
-            </button>
-
-            <button
-              onClick={() => setIsLocationModalOpen(true)}
-              className="glass hover:bg-white/15 px-3 py-1.5 rounded-2xl text-white text-xs md:text-sm font-semibold flex items-center gap-1.5 border border-white/15 cursor-pointer transition-all shadow-sm"
-            >
-              <MapPin size={14} className="text-accent" />
-              <span>{location.name}</span>
-              <ChevronDown size={14} className="text-white/50 ml-0.5" />
-            </button>
+      {/* Main Area */}
+      <main className="flex-1 flex flex-col h-full bg-black relative min-w-0">
+        {/* Mobile top bar with hamburger */}
+        <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 md:hidden">
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(true)}
+            className="p-1.5 text-white/60 hover:text-white transition-colors cursor-pointer"
+            aria-label="Open sidebar"
+          >
+            <Menu className="w-5 h-5" />
+          </button>
+          <div
+            className="flex items-center gap-2 cursor-pointer"
+            onClick={() => setActiveView('home')}
+          >
+            <div className="w-5 h-5 rounded-sm bg-accent/20 border border-accent/30 flex items-center justify-center">
+              <Sun size={12} className="text-accent" />
+            </div>
+            <span className="font-bricolage text-lg font-bold tracking-tight text-white/95">
+              WeatherGPT
+            </span>
           </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setIsLanguageModalOpen(true)}
-              className="glass hover:bg-white/15 px-3 py-1.5 rounded-2xl text-white text-xs md:text-sm font-semibold flex items-center gap-1.5 border border-white/15 cursor-pointer transition-all shadow-sm"
-            >
-              <Languages size={14} className="text-accent" />
-              <span>{language.native}</span>
-              <ChevronDown size={14} className="text-white/50 ml-0.5" />
-            </button>
-          </div>
-        </header>
-
-        {/* Mobile Dropdown Navigation Drawer */}
-        <AnimatePresence>
-          {isMobileMenuOpen && (
-            <motion.div
-              initial={{ opacity: 0, y: -10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              transition={{ duration: 0.2 }}
-              className="md:hidden absolute top-14 left-4 right-4 z-40 glass rounded-3xl p-3 border border-white/20 shadow-2xl flex flex-col gap-1.5 backdrop-blur-xl bg-[#0d0b1a]/95"
-            >
-              {mobileNavItems.map((item) => {
-                const Icon = item.icon
-                const isActive = activeView === item.id
-                const label = Translations.get(language?.code, item.translationKey)
-                return (
-                  <button
-                    key={item.id}
-                    onClick={() => {
-                      setActiveView(item.id)
-                      setIsMobileMenuOpen(false)
-                    }}
-                    className={`flex items-center gap-3 px-4 py-3 rounded-2xl text-sm font-semibold transition-all cursor-pointer ${
-                      isActive
-                        ? 'bg-accent text-white shadow-md border border-accent/40'
-                        : 'text-white/80 hover:bg-white/10'
-                    }`}
-                  >
-                    <Icon size={18} className={isActive ? 'text-white' : 'text-accent'} />
-                    <span>{label}</span>
-                  </button>
-                )
-              })}
-            </motion.div>
-          )}
-        </AnimatePresence>
+          <div className="w-8" /> {/* Spacer for centering */}
+        </div>
 
         {/* View Content */}
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={activeView}
-            initial={{ opacity: 0, scale: 0.99 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 1.01 }}
-            transition={{ duration: 0.2 }}
-            className="flex-1 flex flex-col h-full overflow-hidden"
-          >
-            {views[activeView]}
-          </motion.div>
-        </AnimatePresence>
-      </div>
+        {renderView()}
+      </main>
 
       {/* Modals */}
       <LocationPickerModal
@@ -233,4 +200,3 @@ export default function App() {
     </div>
   )
 }
-

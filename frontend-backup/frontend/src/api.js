@@ -5,7 +5,7 @@ import { getEnsembleWeather } from './utils/ensembleEngine';
 // staging / production deployments.
 const API_BASE = (import.meta.env.VITE_API_URL || 'http://localhost:8888').replace(/\/+$/, '');
 
-export async function sendMessage(messagesPayload, location = '', language = 'English', farmerMode = false, crop = '') {
+export async function sendMessage(messagesPayload, location = '', language = 'English') {
   const formattedMessages = Array.isArray(messagesPayload)
     ? messagesPayload.map((m) => ({
         role: m.role || (m.isUser ? 'user' : 'assistant'),
@@ -18,8 +18,6 @@ export async function sendMessage(messagesPayload, location = '', language = 'En
     messages: formattedMessages,
     location,
     language,
-    farmer_mode: farmerMode,
-    crop,
   });
   return res.data.response;
 }
@@ -64,12 +62,49 @@ export async function getWeatherByCoords(lat, lon, days = 14) {
   };
 }
 
-export function getIMDAlertBulletin(currentWeather, dailyForecast, officialAlert = null) {
-  // Do not guess alerts locally. Only issue alert if official IMD alert is provided.
-  if (officialAlert && officialAlert.level && officialAlert.level !== 'GREEN') {
-    return officialAlert
+export function getIMDAlertBulletin(currentWeather, dailyForecast) {
+  if (!currentWeather) return null
+
+  const temp = currentWeather.temp ?? 25
+  const wind = currentWeather.windSpeed ?? 0
+  const rainProb = dailyForecast?.[0]?.rainProb ?? 0
+  const rainSum = dailyForecast?.[0]?.rainSum ?? 0
+  const code = currentWeather.code ?? 0
+  const uv = currentWeather.uvIndex ?? 0
+  const aqi = currentWeather.aqi ?? 0
+
+  let level = 'GREEN'
+  let title = 'IMD GREEN: Normal Weather Outlook'
+  let color = '#10b981'
+  let advisory = 'No severe weather warnings active for this region.'
+  let action = 'Regular daily activities can continue normally.'
+
+  // RED ALERT CRITERIA (Take Action)
+  if (code >= 95 || rainSum >= 65 || wind >= 50 || temp >= 44 || aqi >= 300) {
+    level = 'RED'
+    color = '#ef4444'
+    title = code >= 95 ? '🔴 IMD RED ALERT: Severe Thunderstorm & Lightning Warning' : temp >= 44 ? '🔴 IMD RED ALERT: Severe Heatwave Warning' : '🔴 IMD RED ALERT: Extremely Heavy Rainfall Warning'
+    advisory = 'Severe hazard imminent! Remain indoors, avoid unnecessary travel, and monitor civil defense advisories.'
+    action = 'TAKE ACTION: Seek sturdy shelter immediately.'
   }
-  return null
+  // ORANGE ALERT CRITERIA (Be Prepared)
+  else if (code >= 80 || rainProb >= 70 || wind >= 35 || temp >= 40 || uv >= 9 || aqi >= 200) {
+    level = 'ORANGE'
+    color = '#f97316'
+    title = rainProb >= 70 ? '🟠 IMD ORANGE ALERT: Heavy Rainfall Expected' : temp >= 40 ? '🟠 IMD ORANGE ALERT: Severe Heatwave Conditions' : '🟠 IMD ORANGE ALERT: Squally Winds & Convective Storms'
+    advisory = 'Potentially dangerous weather conditions. Localized waterlogging or transit delays likely.'
+    action = 'BE PREPARED: Keep rainwear handy and allow extra travel time.'
+  }
+  // YELLOW ALERT CRITERIA (Be Aware)
+  else if (code >= 51 || rainProb >= 40 || wind >= 25 || temp >= 37 || uv >= 7 || aqi >= 100) {
+    level = 'YELLOW'
+    color = '#f59e0b'
+    title = '🟡 IMD YELLOW ALERT: Watch Weather Updates'
+    advisory = 'Unsettled weather conditions present. Minor disruptions possible.'
+    action = 'BE AWARE: Keep track of local weather forecasts.'
+  }
+
+  return { level, title, color, advisory, action }
 }
 
 export async function getAirQualityByCoords(lat, lon) {

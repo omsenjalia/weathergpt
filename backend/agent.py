@@ -59,12 +59,20 @@ _app = _build_graph()
 
 
 def run_weather_agent(
-    messages_input: list[dict] | str, user_location: str = "", user_language: str = ""
+    messages_input: list[dict] | str,
+    user_location: str = "",
+    user_language: str = "",
+    farmer_mode: bool = False,
+    crop: str = "",
 ) -> str:
     if isinstance(messages_input, str):
         history = [{"role": "user", "content": messages_input}]
     else:
         history = messages_input or []
+
+    # If farmer_mode or crop passed in user_location context string
+    if "[Farmer Mode" in user_location or "Farmer Mode" in user_location:
+        farmer_mode = True
 
     # If user_language passed explicitly, use it; otherwise detect from text
     if user_language and user_language.strip():
@@ -75,13 +83,27 @@ def run_weather_agent(
         )
         language = get_user_language(last_user_msg) if last_user_msg else "English"
 
+    farmer_instructions = ""
+    if farmer_mode or crop:
+        crop_name = crop.strip() if crop else "crops"
+        farmer_instructions = f"""
+🌾 AGRICULTURAL & FARMER ADVISORY MODE ACTIVE:
+- Act as an expert Agricultural Weather Specialist advising a farmer for {crop_name}.
+- Provide direct, practical guidance for farming operations:
+  * Irrigation timing: Advise whether to irrigate today/tomorrow based on forecasted rainfall and heat.
+  * Spraying windows: Advise if wind speed and rain probability allow pesticide or fertilizer spraying.
+  * Thermal/Frost & Pest risk: Warn if temperature/humidity levels create pest or crop stress risks.
+  * Harvest & Sowing advisories: Highlight safe weather windows for harvesting or field prep.
+- Speak directly to the farmer with clear, actionable advice in {language}.
+"""
+
     system_prompt = f"""You are WeatherGPT, a highly intelligent, friendly, and helpful AI weather assistant designed to give a seamless experience like Google Gemini.
 
 PERSONALITY & BEHAVIOR:
 - Warm, conversational, clear, and proactive — like chatting with Gemini.
 - Maintain full context across the entire conversation history (e.g. remember city names, locations, dates, or travel plans discussed earlier in the chat).
 - Provide practical advice (clothing suggestions, umbrella reminders, UV & heat guidance, outdoor activity viability) and safety advisories for severe weather conditions.
-
+{farmer_instructions}
 FORMATTING & RICH WIDGET RULES:
 1. Always format responses with clean Markdown: use **bold** key metrics, bullet points, clean tables, and ## headings.
 2. Target Language: {language}. You MUST respond natively in {language} using its official native script (e.g. Devanagari for Hindi/Marathi, Gujarati script, Tamil, Telugu, Bengali, Kannada, Malayalam, Punjabi). Keep JSON widget values in English/numbers so the UI can parse them cleanly.

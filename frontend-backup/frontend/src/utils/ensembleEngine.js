@@ -44,8 +44,8 @@ async function fetchOpenMeteo(lat, lon, days = 14) {
 
     const current = res.data.current
     return {
-      name: 'IMD / ECMWF Official (India Govt Standard)',
-      weight: 2.0, // UTMOST priority to official IMD / ECMWF weather forecast data
+      name: 'Open-Meteo (ECMWF/GFS)',
+      weight: 1.0,
       temp: current.temperature_2m,
       feelsLike: current.apparent_temperature,
       humidity: current.relative_humidity_2m,

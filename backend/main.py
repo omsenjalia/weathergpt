@@ -77,6 +77,8 @@ class ChatRequest(BaseModel):
     messages: list[dict] = []
     location: str = ""
     language: str = "English"
+    farmer_mode: bool = False
+    crop: str = ""
 
 
 class ChatResponse(BaseModel):
@@ -88,7 +90,12 @@ async def chat(request: ChatRequest):
     # Pass messages list if provided, otherwise fallback to message string
     payload = request.messages if request.messages else request.message
     response = await run_in_threadpool(
-        run_weather_agent, payload, request.location, request.language
+        run_weather_agent,
+        payload,
+        request.location,
+        request.language,
+        request.farmer_mode,
+        request.crop,
     )
     return ChatResponse(response=response)
 
