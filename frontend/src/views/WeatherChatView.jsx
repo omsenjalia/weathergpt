@@ -607,10 +607,10 @@ function WeatherDashboardCard({
           {/* Telemetry Cards Grid (5 Natural Tiles) */}
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
             {/* 1. Air Quality (AQI) */}
-            <div className="bg-neutral-950/80 border border-white/[0.06] rounded-2xl p-3 text-left flex flex-col justify-between gap-1 shadow-lg backdrop-blur-xl">
-              <div className="flex items-center justify-between text-xs text-white/50 font-semibold uppercase tracking-wider gap-1">
-                <span className="shrink-0">AQI</span>
-                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold shrink-0 uppercase tracking-tight" style={{ color: aqiStatus.color, backgroundColor: aqiStatus.bg }} title={aqiStatus.text}>
+            <div className="bg-neutral-950/80 border border-white/[0.06] rounded-2xl p-3 text-left flex flex-col justify-between gap-1 shadow-lg backdrop-blur-xl min-w-0 overflow-hidden">
+              <div className="flex items-center justify-between text-xs text-white/50 font-semibold uppercase tracking-wider gap-1 min-w-0 overflow-hidden">
+                <span className="shrink-0 font-bold">AQI</span>
+                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-tight truncate max-w-[70%] inline-block text-right" style={{ color: aqiStatus.color, backgroundColor: aqiStatus.bg }} title={aqiStatus.text}>
                   {aqiStatus.text}
                 </span>
               </div>
@@ -619,10 +619,10 @@ function WeatherDashboardCard({
             </div>
 
             {/* 2. UV Index */}
-            <div className="bg-neutral-950/80 border border-white/[0.06] rounded-2xl p-3 text-left flex flex-col justify-between gap-1 shadow-lg backdrop-blur-xl">
-              <div className="flex items-center justify-between text-xs text-white/50 font-semibold uppercase tracking-wider gap-1">
-                <span className="shrink-0">UV INDEX</span>
-                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold shrink-0" style={{ color: uvStatus.color, backgroundColor: uvStatus.bg }}>
+            <div className="bg-neutral-950/80 border border-white/[0.06] rounded-2xl p-3 text-left flex flex-col justify-between gap-1 shadow-lg backdrop-blur-xl min-w-0 overflow-hidden">
+              <div className="flex items-center justify-between text-xs text-white/50 font-semibold uppercase tracking-wider gap-1 min-w-0 overflow-hidden">
+                <span className="shrink-0 font-bold">UV INDEX</span>
+                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-tight truncate max-w-[65%] inline-block text-right" style={{ color: uvStatus.color, backgroundColor: uvStatus.bg }} title={uvStatus.text}>
                   {uvStatus.text}
                 </span>
               </div>
@@ -633,10 +633,10 @@ function WeatherDashboardCard({
             </div>
 
             {/* 3. Wind & Compass */}
-            <div className="bg-neutral-950/80 border border-white/[0.06] rounded-2xl p-3 text-left flex flex-col justify-between gap-1 shadow-lg backdrop-blur-xl">
-              <div className="flex items-center justify-between text-xs text-white/50 font-semibold uppercase tracking-wider">
-                <span>WIND</span>
-                <span className="text-sky-400 font-mono text-xs">{getCardinalDirection(weather.windDirection)}</span>
+            <div className="bg-neutral-950/80 border border-white/[0.06] rounded-2xl p-3 text-left flex flex-col justify-between gap-1 shadow-lg backdrop-blur-xl min-w-0 overflow-hidden">
+              <div className="flex items-center justify-between text-xs text-white/50 font-semibold uppercase tracking-wider min-w-0 overflow-hidden">
+                <span className="shrink-0 font-bold">WIND</span>
+                <span className="text-sky-400 font-mono text-xs shrink-0">{getCardinalDirection(weather.windDirection)}</span>
               </div>
               <span className="text-2xl font-bold text-white my-0.5">
                 {weather.windSpeed} <span className="text-xs font-normal text-white/40">km/h</span>
@@ -645,10 +645,10 @@ function WeatherDashboardCard({
             </div>
 
             {/* 4. Daylight Cycle */}
-            <div className="bg-neutral-950/80 border border-white/[0.06] rounded-2xl p-3 text-left flex flex-col justify-between gap-1 shadow-lg backdrop-blur-xl">
-              <div className="flex items-center justify-between text-xs text-white/50 font-semibold uppercase tracking-wider">
-                <span>DAYLIGHT</span>
-                <span className="text-amber-400 text-xs font-medium">Sun</span>
+            <div className="bg-neutral-950/80 border border-white/[0.06] rounded-2xl p-3 text-left flex flex-col justify-between gap-1 shadow-lg backdrop-blur-xl min-w-0 overflow-hidden">
+              <div className="flex items-center justify-between text-xs text-white/50 font-semibold uppercase tracking-wider min-w-0 overflow-hidden">
+                <span className="shrink-0 font-bold">DAYLIGHT</span>
+                <span className="text-amber-400 text-xs font-medium shrink-0">Sun</span>
               </div>
               <div className="text-xs font-bold text-white my-0.5 flex justify-between">
                 <span>{weather.sunrise || '06:22 AM'}</span>
@@ -664,10 +664,10 @@ function WeatherDashboardCard({
             </div>
 
             {/* 5. Surface Pressure */}
-            <div className="bg-neutral-950/80 border border-white/[0.06] rounded-2xl p-3 text-left flex flex-col justify-between gap-1 shadow-lg backdrop-blur-xl">
-              <div className="flex items-center justify-between text-xs text-white/50 font-semibold uppercase tracking-wider">
-                <span>PRESSURE</span>
-                <span className="text-emerald-400 text-xs font-medium">hPa</span>
+            <div className="bg-neutral-950/80 border border-white/[0.06] rounded-2xl p-3 text-left flex flex-col justify-between gap-1 shadow-lg backdrop-blur-xl min-w-0 overflow-hidden">
+              <div className="flex items-center justify-between text-xs text-white/50 font-semibold uppercase tracking-wider min-w-0 overflow-hidden">
+                <span className="shrink-0 font-bold">PRESSURE</span>
+                <span className="text-emerald-400 text-xs font-medium shrink-0">hPa</span>
               </div>
               <span className="text-2xl font-bold text-white my-0.5">
                 {Math.round(weather.pressure || 1007)}
@@ -854,10 +854,10 @@ export default function WeatherChatView({
   const empty = messages.length === 0
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-black relative min-w-0">
+    <div className="flex-1 flex flex-col h-full bg-black relative min-w-0 overflow-hidden">
       {/* Main Body — scrollable */}
-      <div className="flex-1 overflow-y-auto px-3 sm:px-6 py-4 flex flex-col justify-center">
-        <div className="max-w-4xl mx-auto w-full my-auto flex flex-col justify-center items-center">
+      <div className="flex-1 overflow-y-auto px-3 sm:px-6 pt-3 pb-8">
+        <div className="max-w-4xl mx-auto w-full flex flex-col items-center">
           {empty ? (
             /* ── Empty State Hero ──────────────────────────────────── */
             <div className="w-full flex flex-col items-center justify-center text-center gap-8 sm:gap-10 py-4">
@@ -886,7 +886,7 @@ export default function WeatherChatView({
             </div>
           ) : (
             /* ── Active Conversation ──────────────────────────────── */
-            <div className="flex flex-col gap-8 pb-12 pt-4">
+            <div className="flex flex-col gap-8 pb-12 pt-4 w-full">
               {messages.map((msg, i) => (
                 <div key={i} className="flex flex-col gap-1 text-left">
                   <span className="text-[11px] font-mono lowercase text-white/40">
@@ -927,16 +927,16 @@ export default function WeatherChatView({
       </div>
 
       {/* ── Floating Bottom Input Bar ──────────────────────────────── */}
-      <div className="px-3 sm:px-6 pb-4 sm:pb-6 pt-2 bg-gradient-to-t from-black via-black to-transparent">
+      <div className="flex-shrink-0 z-30 px-3 sm:px-6 pt-2 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:pb-6 bg-gradient-to-t from-black via-black/95 to-black/40 border-t border-white/10 sm:border-t-0 shadow-2xl backdrop-blur-md">
         {empty && (
-          <div className="mb-2 sm:mb-2.5">
+          <div className="mb-2 sm:mb-2.5 max-w-xl mx-auto">
             <PromptRotator onSelectPrompt={send} langCode={langCode} />
           </div>
         )}
 
         {farmerMode && (
           <div className="max-w-xl mx-auto mb-1.5 flex items-center justify-between text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/30 px-3 py-1 rounded-md">
-            <span className="flex items-center gap-1.5 font-medium">
+            <span className="flex items-center gap-1.5 font-medium truncate">
               <span>🌾</span> <strong>Farmer Advisory Mode Active</strong> — {selectedCrop} Crop Guidance
             </span>
           </div>
@@ -952,17 +952,17 @@ export default function WeatherChatView({
               onChange={(e) => setInput(e.target.value)}
               placeholder={Translations.get(langCode, 'chatPlaceholder') || 'message weathergpt...'}
               disabled={loading}
-              className="w-full h-11 bg-neutral-950 border border-white/15 rounded-md px-4 pr-10 text-xs text-white placeholder:text-white/30 focus:outline-none focus:border-white/40 transition-all"
+              className="w-full h-11 bg-neutral-900/90 border border-white/20 rounded-xl px-4 pr-10 text-sm sm:text-xs text-white placeholder:text-white/40 focus:outline-none focus:border-white/50 shadow-inner transition-all"
             />
             <button
               type="submit"
               disabled={loading || !input.trim()}
-              className="absolute right-3 p-1 text-white/50 hover:text-white disabled:opacity-30 transition-colors cursor-pointer"
+              className="absolute right-3 p-1.5 text-white/50 hover:text-white disabled:opacity-30 transition-colors cursor-pointer"
             >
               {loading ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                <Loader2 className="w-4 h-4 animate-spin" />
               ) : (
-                <ArrowRight className="w-3.5 h-3.5" />
+                <ArrowRight className="w-4 h-4" />
               )}
             </button>
           </div>
@@ -971,7 +971,7 @@ export default function WeatherChatView({
           <button
             type="button"
             onClick={() => setShowVoiceToast(true)}
-            className="h-11 w-11 flex items-center justify-center rounded-md border border-white/15 bg-neutral-950 text-white/50 hover:text-white hover:border-white/30 transition-all cursor-pointer flex-shrink-0"
+            className="h-11 w-11 flex items-center justify-center rounded-xl border border-white/20 bg-neutral-900/90 text-white/60 hover:text-white hover:border-white/40 transition-all cursor-pointer flex-shrink-0"
             aria-label="Voice input"
           >
             <Mic className="w-4 h-4" />
