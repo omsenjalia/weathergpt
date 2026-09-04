@@ -34,11 +34,14 @@
 WeatherGPT is a **full-stack, AI-powered, multilingual weather assistant** built for the Smart India Hackathon. It delivers real-time weather intelligence, agricultural advisories, and environmental hazard alerts to users across India in **10 Indian languages** using native scripts.
 
 **Key capabilities:**
-- **Conversational AI chat** powered by Groq LLM (Qwen 27B) with LangGraph agent orchestration
+- **Conversational AI chat** powered by a 5-model Groq LLM cascade (`Qwen 27B`, `Llama 3.1 8B Instant`, `Llama 3.3 70B`, `Mixtral 8x7B`, `Gemma 2 9B`) with LangGraph agent orchestration & deterministic fallback
+- **9 specialized telemetry AI tools** providing current weather, 7-day forecast, hourly trends, AQI pollutants, UV/solar index, surface pressure, agricultural crop telemetry, geocoding, and official IMD alert bulletins
+- **Domain Guardrails**: Natural casual conversation supported across all topics, with strict guardrails prohibiting software code generation
 - **Multi-source weather telemetry fusion** from up to 5 weather APIs with weighted averaging
-- **Agricultural Farmer Mode** with crop-specific advisories (irrigation, spraying, harvest windows)
+- **Agricultural Farmer Mode** with crop-specific advisories (irrigation, spraying, harvest windows) and strict session isolation
 - **Rich interactive widgets** (weather cards, forecast strips, IMD alert banners) embedded in chat
 - **Interactive Windy weather map** with 7 overlay layers
+- **Mobile-First Responsive UI** with dynamic viewport height (`100dvh`) and safe-area inset adaptation
 - **Developer diagnostics dashboard** with AI sandbox, stress tester, and hazard simulator
 - **Text-to-Speech** for reading responses aloud in regional languages
 - **Auto-location detection** via GPS + IP fallback + reverse geocoding
@@ -60,8 +63,8 @@ graph TB
     subgraph "Backend Server"
         API["FastAPI Server<br/>(Python 3.x)"]
         AGT["LangGraph Agent<br/>(State Machine)"]
-        LLM["Groq Cloud<br/>(Qwen 27B LLM)"]
-        TOOLS["Tool Functions<br/>(geocode, weather, forecast)"]
+        LLM["Groq Multi-Model Cascade<br/>(Qwen 27B → Llama 8B → Llama 70B → Mixtral → Gemma2)"]
+        TOOLS["9 Specialized AI Tools<br/>(geocode, weather, hourly, AQI, UV, pressure, crop, alerts)"]
     end
 
     subgraph "External Weather APIs"
@@ -132,6 +135,7 @@ graph TB
 | **Architecture Viz** | @excalidraw/excalidraw | 0.18.1 | Interactive architecture diagram |
 | **PostCSS** | PostCSS + Autoprefixer | 8.4.0 / 10.4.0 | CSS post-processing |
 | **Fonts** | Google Fonts | — | Inter, Playfair Display, Bricolage Grotesque, Caveat |
+| **Branding Assets** | Custom Dark Vector SVG | — | Sun/cloud high-contrast favicon (`public/favicon.svg`) |
 
 ### Backend
 
@@ -146,7 +150,7 @@ graph TB
 | **Config** | python-dotenv | 1.0.1 | `.env` file loading |
 | **Language Detection** | langdetect | 1.0.9 | Auto-detect user's input language |
 | **Validation** | Pydantic | latest | Request/response models |
-| **LLM Model** | Qwen 3.8-27B | — | 27B param multilingual model via Groq (119 languages) |
+| **LLM Model Cascade** | 5-Model Fallback Chain | — | Primary: `qwen/qwen3.8-27b`<br/>Fallback 1: `llama-3.1-8b-instant`<br/>Fallback 2: `llama-3.3-70b-versatile`<br/>Fallback 3: `mixtral-8x7b-32768`<br/>Fallback 4: `gemma2-9b-it`<br/>+ Deterministic Fallback Synthesizer |
 
 ### Design System
 
@@ -170,7 +174,9 @@ graph TB
 
 ```
 frontend/
-├── index.html                          # HTML entry point (Google Fonts, Leaflet, Windy CDN)
+├── index.html                          # HTML entry point (Google Fonts, Leaflet, Windy CDN, custom favicon)
+├── public/
+│   └── favicon.svg                     # Custom dark vector sun/cloud favicon
 ├── package.json                        # Dependencies & scripts
 ├── vite.config.js                      # Vite + React plugin config
 ├── tailwind.config.js                  # TailwindCSS theme extensions
@@ -299,11 +305,16 @@ graph LR
         PROMPT["System Prompt<br/>(Dynamic: language,<br/>farmer mode, crop)"]
     end
 
-    subgraph "tools.py — Tool Functions"
-        T1["geocode_city<br/>(Open-Meteo Geocoding)"]
-        T2["get_current_weather<br/>(Multi-source fusion)"]
-        T3["get_weather_forecast<br/>(Open-Meteo daily)"]
-        T4["get_user_language<br/>(langdetect auto-detect)"]
+    subgraph "tools.py — Tool Functions (9 AI Tools)"
+        T1["geocode_city<br/>(Geocoding)"]
+        T2["get_current_weather<br/>(Fused Telemetry)"]
+        T3["get_weather_forecast<br/>(7-Day Daily)"]
+        T4["get_hourly_forecast<br/>(24-48h Hourly)"]
+        T5["get_air_quality<br/>(AQI & Pollutants)"]
+        T6["get_uv_index_and_sun<br/>(UV & Solar)"]
+        T7["get_surface_pressure_and_wind<br/>(Pressure & Gusts)"]
+        T8["get_agricultural_crop_telemetry<br/>(Soil & ET0)"]
+        T9["get_official_imd_alerts<br/>(IMD Warnings)"]
     end
 
     EP_CHAT --> GRAPH
@@ -572,28 +583,42 @@ stateDiagram-v2
     tools --> agent: tool results appended
     
     state agent {
-        [*] --> invoke_llm
-        invoke_llm --> return_response
+        [*] --> invoke_llm_cascade
+        invoke_llm_cascade --> return_response: Success (Qwen 27B / Llama 8B / Llama 70B / Mixtral / Gemma 2)
+        invoke_llm_cascade --> deterministic_fallback: All LLM models rate-limited / error
+        deterministic_fallback --> return_response
     }
     
     state tools {
         [*] --> execute_tool
-        execute_tool --> geocode_city: if geocode needed
-        execute_tool --> get_current_weather: if current weather needed
-        execute_tool --> get_weather_forecast: if forecast needed
-        geocode_city --> [*]
-        get_current_weather --> [*]
-        get_weather_forecast --> [*]
+        execute_tool --> geocode_city
+        execute_tool --> get_current_weather
+        execute_tool --> get_weather_forecast
+        execute_tool --> get_hourly_forecast
+        execute_tool --> get_air_quality
+        execute_tool --> get_uv_index_and_sun
+        execute_tool --> get_surface_pressure_and_wind
+        execute_tool --> get_agricultural_crop_telemetry
+        execute_tool --> get_official_imd_alerts
     }
 ```
 
-### 9.2 Graph Compilation
+### 9.2 Graph Compilation & Multi-Model Cascade
 
-The LangGraph state graph is compiled **once at module load time** (not per-request) for performance:
+The LangGraph state graph is compiled **once at module load time** with a 5-tier fallback cascade using `.with_fallbacks()`:
 
 ```python
+primary_llm = ChatGroq(model="qwen/qwen3.8-27b", temperature=0.3)
+fallback_1 = ChatGroq(model="llama-3.1-8b-instant", temperature=0.3)
+fallback_2 = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.3)
+fallback_3 = ChatGroq(model="mixtral-8x7b-32768", temperature=0.3)
+fallback_4 = ChatGroq(model="gemma2-9b-it", temperature=0.3)
+
+llm = primary_llm.with_fallbacks([fallback_1, fallback_2, fallback_3, fallback_4])
+llm_with_tools = llm.bind_tools(TOOLS)
+
 graph = StateGraph(AgentState)
-graph.add_node("agent", agent_node)           # LLM invocation
+graph.add_node("agent", agent_node)           # LLM cascade invocation with deterministic fallback
 graph.add_node("tools", ToolNode(TOOLS))      # Auto tool dispatch
 graph.set_entry_point("agent")
 graph.add_conditional_edges("agent", should_continue, {"tools": "tools", END: END})
@@ -601,27 +626,36 @@ graph.add_edge("tools", "agent")              # Loop back after tool execution
 _app = graph.compile()                        # Compiled once, reused across requests
 ```
 
-### 9.3 Tool Definitions
+If all 5 LLMs fail or hit Groq 429 rate limits, `run_deterministic_telemetry_fallback()` triggers, fetching live telemetry from weather APIs and synthesizing structured widget responses to guarantee 0% failure downtime.
+
+### 9.3 Tool Definitions (9 Specialized AI Tools)
 
 | Tool | Parameters | Returns | Data Source |
 |------|-----------|---------|-------------|
-| `geocode_city` | `city_name: str` | `{latitude, longitude, city, country, state}` or `{error}` | Open-Meteo Geocoding API |
-| `get_current_weather` | `latitude: float, longitude: float` | Fused weather data from up to 3 backend sources (weighted avg) | Open-Meteo + WeatherAPI + OWM |
-| `get_weather_forecast` | `latitude: float, longitude: float, days: int = 7` | `{forecast: [{date, max_temp, min_temp, rainfall_mm, rain_probability, wind, condition}]}` | Open-Meteo Forecast API |
+| `geocode_city` | `city_name: str` | `{latitude, longitude, city, country, state}` | Open-Meteo Geocoding API |
+| `get_current_weather` | `latitude: float, longitude: float` | Fused current weather (temp, humidity, wind, pressure, weather code) | Open-Meteo + WeatherAPI + OWM |
+| `get_weather_forecast` | `latitude: float, longitude: float, days: int = 7` | 7-day forecast (max/min temp, rainfall mm, rain prob %, condition) | Open-Meteo Forecast API |
+| `get_hourly_forecast` | `latitude: float, longitude: float` | 24-48h hourly sequence (temp, rain prob %, wind speed) | Open-Meteo Hourly API |
+| `get_air_quality` | `latitude: float, longitude: float` | Real-time US AQI, PM2.5, PM10, CO, NO2, SO2, O3 metrics | Open-Meteo Air Quality API |
+| `get_uv_index_and_sun` | `latitude: float, longitude: float` | Solar UV index, clear-sky radiation, sunrise/sunset times | Open-Meteo Solar API |
+| `get_surface_pressure_and_wind` | `latitude: float, longitude: float` | Atmospheric pressure (hPa), wind speed (km/h), gusts, direction (°) | Open-Meteo Surface API |
+| `get_agricultural_crop_telemetry` | `latitude: float, longitude: float` | Evapotranspiration ET0 (mm), soil temp (0-7cm), soil moisture (m³/m³), VPD | Open-Meteo Agromet API |
+| `get_official_imd_alerts` | `latitude: float, longitude: float` | Official alert status (RED/ORANGE/YELLOW/GREEN), warning title, action | Open-Meteo / IMD Warning Stream |
 
-### 9.4 System Prompt Architecture
+### 9.4 System Prompt Architecture & Domain Guardrails
 
 The system prompt is **dynamically constructed** per request with these sections:
 
 | Section | Content |
 |---------|---------|
-| **Personality** | Warm, conversational, proactive (Gemini-like) |
+| **Personality** | Warm, conversational, helpful weather intelligence assistant |
 | **Context Memory** | Instructed to maintain full conversation context |
-| **Language Directive** | `Target Language: {language}` with native script requirement |
-| **Widget Rules** | JSON schema for `widget:weather`, `widget:forecast`, `widget:alert` |
-| **Tool Usage** | Always call `geocode_city` before weather tools |
-| **Farmer Mode** (conditional) | Crop-specific advisory instructions (irrigation, spraying, harvest, pest risk) |
-| **Location Context** (conditional) | User's current location string |
+| **Language Directive** | `Target Language: {language}` with native script requirement across 10 Indian languages |
+| **Widget Rules** | Standardized JSON schema for `widget:weather`, `widget:forecast`, `widget:alert` |
+| **Casual Conversation Allowed** | Open friendly chat, greetings, banter, everyday discussions allowed |
+| **Strict Code Generation Ban** | Explicitly prohibits software programming code (Python, JS, C++, HTML, CSS, SQL, etc.) generation or script writing |
+| **Farmer Mode Reset** | Evaluates boolean `farmer_mode`; explicit instructions applied when disabled, and frontend resets `activeCrop` to prevent session context bleeding |
+| **Location Context** | User's current location string |
 
 ---
 
@@ -924,6 +958,7 @@ graph TB
 |--------|----------|---------|
 | **Platform** | Vercel (Static) | Vercel (Serverless Python) |
 | **Build Command** | `npm run build` | Auto (Vercel Python runtime) |
+| **Install Command** | `npm ci --legacy-peer-deps --no-audit --no-fund` | Auto (Vercel Python requirements.txt) |
 | **Output** | `dist/` | `api/index.py` |
 | **Framework** | Vite | FastAPI |
 | **Entry Point** | `index.html` | `api/index.py → from main import app` |
