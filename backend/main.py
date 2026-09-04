@@ -138,8 +138,28 @@ async def sandbox_test(request: SandboxRequest):
         )
         res.headers["Access-Control-Allow-Origin"] = "*"
         res.headers["Access-Control-Allow-Methods"] = "*"
-        res.headers["Access-Control-Allow-Headers"] = "*"
         return res
+
+
+from imd_service import get_all_imd_features, fetch_imd_api
+
+class IMDQueryRequest(BaseModel):
+    api_id: str = "api-1"
+    params: dict = {}
+
+@app.get("/api/imd/features")
+@app.get("/api/imd/features/")
+async def imd_features():
+    """Return catalog of all 28 IMD API features from https://api.imd.gov.in/public/api_reference.html"""
+    features = get_all_imd_features()
+    return {"status": "ok", "total": len(features), "features": features}
+
+@app.post("/api/imd/query")
+@app.post("/api/imd/query/")
+async def imd_query(req: IMDQueryRequest):
+    """Execute curl request to specified IMD API and return CLI command + result."""
+    result = await run_in_threadpool(fetch_imd_api, req.api_id, req.params)
+    return result
 
 
 @app.get("/health")

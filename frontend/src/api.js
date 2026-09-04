@@ -95,3 +95,24 @@ export async function geocodeCity(city) {
   });
   return res.data.results?.[0] || null;
 }
+
+export async function getIMDFeatures() {
+  try {
+    const res = await axios.get(`${API_BASE}/api/imd/features`, { timeout: 10000 });
+    return res.data;
+  } catch (err) {
+    console.error('IMD features fetch error:', err);
+    return { status: 'error', features: [] };
+  }
+}
+
+export async function queryIMDAPI(apiId = 'api-1', params = {}) {
+  try {
+    const res = await axios.post(`${API_BASE}/api/imd/query`, { api_id: apiId, params }, { timeout: 15000 });
+    return res.data;
+  } catch (err) {
+    console.error('IMD API query error:', err);
+    return { status: 500, error: err.message };
+  }
+}
+

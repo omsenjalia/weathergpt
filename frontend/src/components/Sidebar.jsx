@@ -126,6 +126,7 @@ export default function Sidebar({
           </span>
           {[
             { id: 'home', label: Translations.get(langCode, 'navWeather') || 'Weather' },
+            { id: 'imd', label: 'IMD Official Hub (28 APIs)', badge: 'Priority 1' },
             { id: 'map', label: Translations.get(langCode, 'navMap') || 'Map' },
             { id: 'architecture', label: 'Architecture Map' },
             { id: 'dev', label: Translations.get(langCode, 'navDev') || 'Developer' },
@@ -138,13 +139,18 @@ export default function Sidebar({
                   onNavigate(item.id)
                   onCloseSidebar?.()
                 }}
-                className={`flex items-center px-2.5 py-1.5 rounded text-xs cursor-pointer transition-colors ${
+                className={`flex items-center justify-between px-2.5 py-1.5 rounded text-xs cursor-pointer transition-colors ${
                   isActive
                     ? 'bg-white/10 text-white font-medium'
                     : 'text-white/60 hover:bg-white/5 hover:text-white'
                 }`}
               >
                 <span className="truncate">{item.label}</span>
+                {item.badge && (
+                  <span className="text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.2 rounded-full">
+                    {item.badge}
+                  </span>
+                )}
               </button>
             )
           })}

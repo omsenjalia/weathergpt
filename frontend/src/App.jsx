@@ -6,6 +6,7 @@ import LanguagePickerModal, { INDIAN_LANGUAGES } from './components/LanguagePick
 import WeatherChatView from './views/WeatherChatView'
 import MapView from './views/MapView'
 import DevView from './views/DevView'
+import IMDHubView from './views/IMDHubView'
 import ExcalidrawArchitectureView from './views/ExcalidrawArchitectureView'
 import { autoDetectUserLocation } from './utils/location'
 
@@ -27,10 +28,12 @@ export default function App() {
   const [farmerMode, setFarmerMode] = useState(false)
   const [selectedCrop, setSelectedCrop] = useState('Cotton')
 
-  // Check URL path for /dev or shortcut listener
+  // Check URL path for /dev, /imd or shortcut listener
   useEffect(() => {
     if (window.location.pathname === '/dev') {
       setActiveView('dev')
+    } else if (window.location.pathname === '/imd') {
+      setActiveView('imd')
     } else if (window.location.pathname === '/architecture') {
       setActiveView('architecture')
     }
@@ -112,6 +115,8 @@ export default function App() {
 
   const renderView = () => {
     switch (activeView) {
+      case 'imd':
+        return <IMDHubView location={location} />
       case 'map':
         return <MapView location={location} language={language} />
       case 'dev':

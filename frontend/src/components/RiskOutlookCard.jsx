@@ -74,14 +74,16 @@ export default function RiskOutlookCard({ forecast = [], langCode = 'en' }) {
 
   return (
     <div className="w-full bg-neutral-950/90 border border-white/12 rounded-xl p-3 sm:p-4 text-left">
-      <div className="flex items-center justify-between mb-3 pb-2 border-b border-white/10">
+      <div className="flex items-center justify-between mb-3 pb-2 border-b border-white/10 flex-wrap gap-1">
         <div className="flex items-center gap-2">
           <ShieldAlert size={16} className="text-amber-400" />
           <h3 className="text-xs font-bold uppercase tracking-wider text-white">
             5-Day Weather & Agricultural Risk Outlook
           </h3>
         </div>
-        <span className="text-[10px] text-white/40 font-mono">5-Day Assessment</span>
+        <span className="text-[10px] text-amber-300 font-bold bg-amber-500/20 px-2 py-0.5 rounded-full border border-amber-500/30 flex items-center gap-1">
+          IMD Official Priority 1
+        </span>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-5 gap-2">

@@ -21,6 +21,11 @@ from tools import (
     get_surface_pressure_and_wind,
     get_agricultural_crop_telemetry,
     get_official_imd_alerts,
+    get_imd_city_forecast,
+    get_imd_district_warning,
+    get_imd_cyclone_track,
+    get_imd_agromet_official_advisory,
+    query_any_imd_api_feature,
     get_user_language,
 )
 
@@ -34,6 +39,11 @@ TOOLS = [
     get_surface_pressure_and_wind,
     get_agricultural_crop_telemetry,
     get_official_imd_alerts,
+    get_imd_city_forecast,
+    get_imd_district_warning,
+    get_imd_cyclone_track,
+    get_imd_agromet_official_advisory,
+    query_any_imd_api_feature,
 ]
 
 
@@ -192,6 +202,7 @@ def run_weather_agent(
 
 PERSONALITY & CONVERSATIONAL FREEDOM:
 - You are WeatherGPT, a warm, friendly, intelligent AI assistant designed to give a seamless experience like Google Gemini.
+- IMD (India Meteorological Department - Ministry of Earth Sciences, Govt of India) is your MOST TRUSTED Priority 1 official weather data source. Always cite IMD official forecasts, Warnings, Nowcasts, and Agromet advisories with highest authority when answering weather inquiries for India.
 - You are free to engage in natural, friendly, casual conversation with users about any topic (greetings, general chat, recommendations, travel, sports, daily life, and weather insights).
 - Maintain full context across the entire conversation history (e.g. remember city names, locations, dates, or travel plans discussed earlier in the chat).
 - Provide practical advice (clothing suggestions, umbrella reminders, UV & heat guidance, outdoor activity viability) and safety advisories for severe weather conditions.
