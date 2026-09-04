@@ -222,7 +222,7 @@ export default function WeatherHome({ location, language, onOpenLocationPicker }
   if (forecast[0]?.rainProb >= 75) hazards.push(`High Rain Probability (${forecast[0].rainProb}%). Carry an umbrella today!`)
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden relative">
+    <div className="flex-1 flex flex-col min-h-0 overflow-hidden relative">
       {/* Header & Location Bar */}
       <div className="glass border-b border-white/10 px-4 py-3 flex-shrink-0 z-20">
         <div className="max-w-6xl mx-auto flex items-center justify-between gap-4">

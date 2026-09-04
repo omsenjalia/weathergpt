@@ -153,9 +153,9 @@ export default function App() {
       />
 
       {/* Main Area */}
-      <main className="flex-1 flex flex-col h-full bg-black relative min-w-0">
+      <main className="flex-1 flex flex-col min-h-0 bg-black relative min-w-0 overflow-hidden">
         {/* Mobile top bar with hamburger */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 md:hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 md:hidden flex-shrink-0 z-20">
           <button
             type="button"
             onClick={() => setSidebarOpen(true)}
