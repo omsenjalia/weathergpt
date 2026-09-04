@@ -135,9 +135,8 @@ def run_weather_agent(
     else:
         history = messages_input or []
 
-    # Detect Farmer Mode from context
-    if "[Farmer Mode" in user_location or "Farmer Mode" in user_location:
-        farmer_mode = True
+    # Clean user location to prevent stale context leaks
+    clean_location = user_location.replace("[Farmer Mode Active]", "").replace("Farmer Mode Active", "").strip()
 
     # Detect user language
     last_user_msg = next(
@@ -148,9 +147,8 @@ def run_weather_agent(
     else:
         language = get_user_language(last_user_msg) if last_user_msg else "English"
 
-    # Specialized Sub-Agent Prompts
-    farmer_instructions = ""
-    if farmer_mode or crop:
+    # Strict Farmer Mode evaluation: active ONLY when farmer_mode boolean is explicitly True
+    if farmer_mode:
         crop_name = crop.strip() if crop else "crops"
         farmer_instructions = f"""
 🌾 AGRICULTURAL & FARMER ADVISORY SPECIALIST SUB-AGENT ACTIVE:
@@ -161,6 +159,12 @@ def run_weather_agent(
   * Thermal/Frost & Pest risk: Warn if temperature/humidity levels create pest or crop stress risks.
   * Harvest & Sowing advisories: Highlight safe weather windows for harvesting or field prep.
 - Speak directly to the farmer with clear, actionable advice in {language}.
+"""
+    else:
+        farmer_instructions = """
+🌍 STANDARD WEATHER ASSISTANT MODE (FARMER ADVISORY MODE IS OFF):
+- Act strictly as a general conversational weather assistant for everyday citizens.
+- Do NOT act as a farmer advisor or mention crops, farming, irrigation, or pesticide spraying unless the user explicitly asks a farming question in their prompt.
 """
 
     system_prompt = f"""You are WeatherGPT, a highly intelligent, friendly, and helpful AI weather assistant designed to give a seamless experience like Google Gemini.
@@ -189,7 +193,7 @@ FORMATTING & RICH WIDGET RULES:
    ```
 5. Be engaging, clear, and direct.
 
-{f'User location context: {user_location}' if user_location else ''}
+{f'User location context: {clean_location}' if clean_location else ''}
 """
 
     formatted_messages = [SystemMessage(content=system_prompt)]

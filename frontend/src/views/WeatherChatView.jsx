@@ -833,8 +833,9 @@ export default function WeatherChatView({
 
     try {
       const farmerContext = farmerMode ? `[Farmer Mode Active - Crop: ${selectedCrop}]` : ''
-      const fullCtx = `${locationContext} ${farmerContext}`.trim()
-      const response = await sendMessage(updatedMessages, fullCtx, languageName, farmerMode, selectedCrop)
+      const fullCtx = farmerMode ? `${locationContext} ${farmerContext}`.trim() : locationContext
+      const activeCrop = farmerMode ? selectedCrop : ''
+      const response = await sendMessage(updatedMessages, fullCtx, languageName, farmerMode, activeCrop)
       setMessages(prev => [...prev, { text: response, isUser: false }])
     } catch {
       setMessages(prev => [
