@@ -27,7 +27,13 @@ class AgentState(TypedDict):
 # Oriya, Assamese, etc. — ideal for a multilingual India weather assistant.
 GROQ_MODEL = os.getenv("GROQ_MODEL", "qwen/qwen3.8-27b")
 
-llm = ChatGroq(model=GROQ_MODEL, temperature=0).bind_tools(TOOLS)
+# Configure primary LLM and fallbacks to handle 429 Rate Limits gracefully
+primary_llm = ChatGroq(model=GROQ_MODEL, temperature=0, max_retries=3).bind_tools(TOOLS)
+fallback_1 = ChatGroq(model="llama-3.1-8b-instant", temperature=0, max_retries=3).bind_tools(TOOLS)
+fallback_2 = ChatGroq(model="llama-3.3-70b-versatile", temperature=0, max_retries=3).bind_tools(TOOLS)
+fallback_3 = ChatGroq(model="mixtral-8x7b-32768", temperature=0, max_retries=3).bind_tools(TOOLS)
+
+llm = primary_llm.with_fallbacks([fallback_1, fallback_2, fallback_3])
 
 
 def agent_node(state: AgentState):
@@ -137,5 +143,17 @@ FORMATTING & RICH WIDGET RULES:
         elif role == "assistant":
             formatted_messages.append(AIMessage(content=content))
 
-    result = _app.invoke({"messages": formatted_messages})
-    return result["messages"][-1].content
+    try:
+        result = _app.invoke({"messages": formatted_messages})
+        return result["messages"][-1].content
+    except Exception as exc:
+        err_msg = str(exc).lower()
+        if "429" in err_msg or "rate_limit" in err_msg or "too many requests" in err_msg:
+            # Fall back to high-capacity instant model if primary model rate limits
+            try:
+                fast_llm = ChatGroq(model="llama-3.1-8b-instant", temperature=0).bind_tools(TOOLS)
+                res = fast_llm.invoke(formatted_messages)
+                return res.content
+            except Exception:
+                return "The WeatherGPT AI service is experiencing high traffic right now. Please wait a few seconds and try again."
+        raise exc
