@@ -11,9 +11,9 @@ from langchain_groq import ChatGroq
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
 
-from tools import geocode_city, get_current_weather, get_weather_forecast, get_user_language
+from tools import geocode_city, get_current_weather, get_weather_forecast, get_air_quality, get_user_language
 
-TOOLS = [geocode_city, get_current_weather, get_weather_forecast]
+TOOLS = [geocode_city, get_current_weather, get_weather_forecast, get_air_quality]
 
 
 class AgentState(TypedDict):

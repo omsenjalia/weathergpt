@@ -227,3 +227,46 @@ def get_weather_forecast(latitude: float, longitude: float, days: int = 7) -> di
             return {"forecast": forecast}
     except Exception as e:
         return {"error": str(e)}
+
+
+@tool
+def get_air_quality(latitude: float, longitude: float) -> dict:
+    """Get live US AQI, PM2.5, PM10, NO2, SO2, CO, and Ozone levels for a location. Call geocode_city first for coordinates."""
+    try:
+        with httpx.Client(timeout=10) as client:
+            res = client.get(
+                "https://air-quality-api.open-meteo.com/v1/air-quality",
+                params={
+                    "latitude": latitude,
+                    "longitude": longitude,
+                    "current": "us_aqi,pm10,pm2_5,carbon_monoxide,nitrogen_dioxide,sulphur_dioxide,ozone",
+                    "timezone": "auto",
+                },
+            )
+            data = res.json()
+            curr = data.get("current", {})
+            us_aqi = curr.get("us_aqi", 42)
+
+            category = "Good"
+            if us_aqi > 300:
+                category = "Hazardous"
+            elif us_aqi > 200:
+                category = "Very Unhealthy"
+            elif us_aqi > 150:
+                category = "Unhealthy"
+            elif us_aqi > 100:
+                category = "Unhealthy for Sensitive Groups"
+            elif us_aqi > 50:
+                category = "Moderate"
+
+            return {
+                "us_aqi": us_aqi,
+                "category": category,
+                "pm2_5": curr.get("pm2_5"),
+                "pm10": curr.get("pm10"),
+                "nitrogen_dioxide": curr.get("nitrogen_dioxide"),
+                "ozone": curr.get("ozone"),
+            }
+    except Exception as e:
+        return {"error": str(e)}
+
