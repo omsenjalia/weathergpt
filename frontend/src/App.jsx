@@ -134,7 +134,7 @@ export default function App() {
   }
 
   return (
-    <div className="flex h-screen h-[100dvh] w-screen overflow-hidden bg-black text-white font-sans">
+    <div className="flex h-screen h-[100dvh] w-full max-w-full overflow-hidden bg-black text-white font-sans">
       {/* Sidebar */}
       <Sidebar
         activeView={activeView}

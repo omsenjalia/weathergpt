@@ -264,8 +264,8 @@ function BezierTemperatureGraph({ temps, activeIndex = 4 }) {
   const activePoint = points[Math.min(activeIndex, points.length - 1)] || points[0]
 
   return (
-    <div className="w-full relative mt-4 pt-1">
-      <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-20 overflow-visible">
+    <div className="w-full relative mt-4 pt-1 overflow-hidden">
+      <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-20 overflow-hidden">
         <defs>
           <filter id="curveGlow" x="-20%" y="-20%" width="140%" height="140%">
             <feGaussianBlur stdDeviation="2.5" result="blur" />
