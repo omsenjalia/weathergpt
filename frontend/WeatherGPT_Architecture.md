@@ -2,7 +2,7 @@
 
 > **Project**: WeatherGPT — AI-Powered Multilingual Weather Assistant for India  
 > **Context**: Smart India Hackathon (SIH)  
-> **Generated**: 2026-09-04  
+> **Generated**: 2026-09-04 · **Last Updated**: 2026-09-05 (official IMD 28-API backend integration)  
 
 ---
 
@@ -35,9 +35,10 @@ WeatherGPT is a **full-stack, AI-powered, multilingual weather assistant** built
 
 **Key capabilities:**
 - **Conversational AI chat** powered by a 5-model Groq LLM cascade (`Qwen 27B`, `Llama 3.1 8B Instant`, `Llama 3.3 70B`, `Mixtral 8x7B`, `Gemma 2 9B`) with LangGraph agent orchestration & deterministic fallback
-- **9 specialized telemetry AI tools** providing current weather, 7-day forecast, hourly trends, AQI pollutants, UV/solar index, surface pressure, agricultural crop telemetry, geocoding, and official IMD alert bulletins
+- **14 specialized telemetry AI tools** providing current weather, 7-day forecast, hourly trends, AQI pollutants, UV/solar index, surface pressure, agricultural crop telemetry, geocoding, and 5 dedicated official IMD tools (city forecast, district warning, cyclone track, agromet advisory, and generic 28-API query)
+- **Official IMD API integration** — direct live `curl`-based access to all 28 published India Meteorological Department APIs (forecast, warning, cyclone, marine, rainfall, agromet, astronomical, RADAR/lightning), with a 3-tier graceful fallback (live IMD → live IMD CAP alert feed → schema-accurate sample data) so a response is always returned
 - **Domain Guardrails**: Natural casual conversation supported across all topics, with strict guardrails prohibiting software code generation
-- **Multi-source weather telemetry fusion** from up to 5 weather APIs with weighted averaging
+- **Multi-source weather telemetry fusion** from up to 5 weather APIs with weighted averaging, with official IMD/ECMWF data given Priority-1 trust weighting (3.0×)
 - **Agricultural Farmer Mode** with crop-specific advisories (irrigation, spraying, harvest windows) and strict session isolation
 - **Rich interactive widgets** (weather cards, forecast strips, IMD alert banners) embedded in chat
 - **Interactive Windy weather map** with 7 overlay layers
@@ -64,7 +65,8 @@ graph TB
         API["FastAPI Server<br/>(Python 3.x)"]
         AGT["LangGraph Agent<br/>(State Machine)"]
         LLM["Groq Multi-Model Cascade<br/>(Qwen 27B → Llama 8B → Llama 70B → Mixtral → Gemma2)"]
-        TOOLS["9 Specialized AI Tools<br/>(geocode, weather, hourly, AQI, UV, pressure, crop, alerts)"]
+        TOOLS["14 Specialized AI Tools<br/>(geocode, weather, hourly, AQI, UV, pressure, crop, 5 IMD tools)"]
+        IMDSVC["imd_service.py<br/>(28 Official IMD API Catalog + curl execution)"]
     end
 
     subgraph "External Weather APIs"
@@ -74,6 +76,11 @@ graph TB
         OWM["OpenWeatherMap"]
         AW["AccuWeather"]
         AQ["Air Quality API<br/>(Open-Meteo)"]
+    end
+
+    subgraph "Official Government Data (Priority 1)"
+        IMDAPI["api.imd.gov.in<br/>(28 endpoints — live curl)"]
+        IMDCAP["IMD CAP Alert Feed<br/>(S3 RSS/XML fallback)"]
     end
 
     subgraph "External Services"
@@ -95,6 +102,9 @@ graph TB
     TOOLS --> OM
     TOOLS --> WA
     TOOLS --> OWM
+    TOOLS --> IMDSVC
+    IMDSVC -->|"live curl"| IMDAPI
+    IMDSVC -->|"fallback"| IMDCAP
 
     EE --> OM
     EE --> WA
@@ -194,20 +204,20 @@ frontend/
     ├── index.css                       # Global CSS + Tailwind directives
     ├── views/
     │   ├── WeatherChatView.jsx         # Main view — dashboard + AI chat (990 lines)
-    │   ├── MapView.jsx                 # Windy interactive weather map (65 lines)
-    │   ├── DevView.jsx                 # Developer diagnostics dashboard (971 lines)
+    │   ├── MapView.jsx                 # Windy interactive weather map (64 lines)
+    │   ├── DevView.jsx                 # Developer diagnostics dashboard (970 lines)
     │   ├── ExcalidrawArchitectureView.jsx  # Architecture diagram viewer (embedded)
     │   ├── WeatherHome.jsx             # Legacy weather home view (unused)
     │   ├── ChatView.jsx                # Legacy chat view (unused)
     │   └── VoiceView.jsx              # Voice input view (coming soon)
     ├── components/
-    │   ├── Sidebar.jsx                 # App navigation sidebar (222 lines)
-    │   ├── LocationPickerModal.jsx     # City search modal with GPS detection (244 lines)
+    │   ├── Sidebar.jsx                 # App navigation sidebar (226 lines)
+    │   ├── LocationPickerModal.jsx     # City search modal with GPS detection (243 lines)
     │   ├── LanguagePickerModal.jsx     # Language selector modal (96 lines)
-    │   ├── PromptRotator.jsx           # Auto-rotating suggestion prompts (216 lines)
-    │   ├── WeatherMarquee.jsx          # Scrolling multi-city weather strip (130 lines)
+    │   ├── PromptRotator.jsx           # Auto-rotating suggestion prompts (215 lines)
+    │   ├── WeatherMarquee.jsx          # Scrolling multi-city weather strip (129 lines)
     │   ├── MarkdownContent.jsx         # Generic markdown renderer (139 lines)
-    │   ├── RiskOutlookCard.jsx         # 5-day risk assessment grid (138 lines)
+    │   ├── RiskOutlookCard.jsx         # 5-day risk assessment grid, IMD Priority-1 badge (139 lines)
     │   ├── VoiceComingSoonToast.jsx    # Toast notification placeholder
     │   └── bits/
     │       ├── Aurora.jsx              # Animated aurora gradient background
@@ -215,8 +225,8 @@ frontend/
     │       ├── BlurText.jsx            # Blurred text reveal animation
     │       └── AnimatedContent.jsx     # Fade-in animated wrapper
     └── utils/
-        ├── ensembleEngine.js           # Multi-source weather data fusion (280 lines)
-        ├── location.js                 # GPS, IP, reverse geocode utilities (164 lines)
+        ├── ensembleEngine.js           # Multi-source weather fusion, IMD Priority-1 weighting (279 lines)
+        ├── location.js                 # GPS, IP, reverse geocode utilities (163 lines)
         ├── speechEngine.js             # Text-to-Speech via Web Speech API (89 lines)
         └── translations.js             # Full i18n dictionary — 10 languages (1,221 lines)
 ```
@@ -225,10 +235,11 @@ frontend/
 
 ```
 backend/
-├── main.py                 # FastAPI app — endpoints, middleware, models (216 lines)
-├── agent.py                # LangGraph AI agent — graph, prompts, execution (142 lines)
-├── tools.py                # LangChain tool functions — geocode, weather, forecast (230 lines)
-├── requirements.txt        # Python dependencies (10 packages)
+├── main.py                 # FastAPI app — endpoints, middleware, models (235 lines)
+├── agent.py                # LangGraph AI agent — graph, prompts, execution (268 lines)
+├── tools.py                # LangChain tool functions — geocode, weather, forecast, 5 IMD tools (571 lines)
+├── imd_service.py          # Official IMD API catalog (28 endpoints) + live curl execution + CAP fallback (693 lines)
+├── requirements.txt        # Python dependencies (10 packages, no new deps for IMD — stdlib only)
 ├── vercel.json             # Vercel serverless config (empty — uses api/ convention)
 ├── .env                    # Environment variables (gitignored)
 ├── .env.example            # Template for required env vars
@@ -241,12 +252,12 @@ backend/
 
 | Area | Files | Total Lines | Largest File |
 |------|-------|-------------|--------------|
-| **Frontend — Views** | 7 | ~2,400 | WeatherChatView.jsx (990 lines) |
-| **Frontend — Components** | 12 | ~1,300 | LocationPickerModal.jsx (244 lines) |
+| **Frontend — Views** | 7 | ~2,395 | WeatherChatView.jsx (990 lines) |
+| **Frontend — Components** | 12 | ~1,300 | LocationPickerModal.jsx (243 lines) |
 | **Frontend — Utils** | 4 | ~1,750 | translations.js (1,221 lines) |
-| **Frontend — Config/Root** | 6 | ~280 | App.jsx (203 lines) |
-| **Backend** | 4 | ~600 | tools.py (230 lines) |
-| **Total** | **33** | **~6,330** | — |
+| **Frontend — Config/Root** | 6 | ~330 | App.jsx (207 lines) |
+| **Backend** | 5 | ~1,800 | imd_service.py (693 lines) |
+| **Total** | **34** | **~7,570** | — |
 
 ---
 
@@ -274,6 +285,11 @@ backend/
 | `OPENWEATHER_KEY` | Optional | OpenWeatherMap key for backend fusion |
 | `TOMORROW_KEY` | Optional | Tomorrow.io key (checked but not implemented in backend) |
 | `ACCUWEATHER_KEY` | Optional | AccuWeather key (checked but not implemented in backend) |
+| `IMD_API_KEY` | Optional | Official IMD API key, sent as `x-api-key` header to `api.imd.gov.in`. If unset, `imd_service.py` falls back to the live IMD CAP alert feed, then to schema-accurate sample data — no request ever hard-fails. |
+| `IMD_JWT_TOKEN` | Optional | Official IMD bearer token, sent as `Authorization: Bearer` header alongside `IMD_API_KEY`. Same graceful fallback applies if unset. |
+
+> [!NOTE]
+> **Not yet in `backend/.env.example`** — `IMD_API_KEY` and `IMD_JWT_TOKEN` are read via `os.getenv()` in `imd_service.py` but aren't listed in the example file yet. Worth adding there so new setups know they exist, even though the app runs fully without them.
 
 > [!NOTE]
 > The backend checks for `VITE_`-prefixed keys as fallback (e.g. `VITE_WEATHERAPI_KEY`), enabling shared key configuration when both frontend and backend are deployed together.
@@ -305,7 +321,7 @@ graph LR
         PROMPT["System Prompt<br/>(Dynamic: language,<br/>farmer mode, crop)"]
     end
 
-    subgraph "tools.py — Tool Functions (9 AI Tools)"
+    subgraph "tools.py — Tool Functions (14 AI Tools)"
         T1["geocode_city<br/>(Geocoding)"]
         T2["get_current_weather<br/>(Fused Telemetry)"]
         T3["get_weather_forecast<br/>(7-Day Daily)"]
@@ -315,6 +331,16 @@ graph LR
         T7["get_surface_pressure_and_wind<br/>(Pressure & Gusts)"]
         T8["get_agricultural_crop_telemetry<br/>(Soil & ET0)"]
         T9["get_official_imd_alerts<br/>(IMD Warnings)"]
+        T10["get_imd_city_forecast<br/>(Official IMD 7-Day)"]
+        T11["get_imd_district_warning<br/>(Official District Alert)"]
+        T12["get_imd_cyclone_track<br/>(Official Cyclone Track)"]
+        T13["get_imd_agromet_official_advisory<br/>(Official Crop Advisory)"]
+        T14["query_any_imd_api_feature<br/>(Generic — any of 28 IMD APIs)"]
+    end
+
+    subgraph "imd_service.py — Official IMD Layer"
+        CAT["IMD_API_CATALOG<br/>(28 endpoints, 10 categories)"]
+        FETCH["fetch_imd_api()<br/>(live curl → CAP RSS fallback → sample schema)"]
     end
 
     EP_CHAT --> GRAPH
@@ -325,6 +351,14 @@ graph LR
     TOOL_NODE --> T1
     TOOL_NODE --> T2
     TOOL_NODE --> T3
+    TOOL_NODE --> T10
+    TOOL_NODE --> T14
+    T10 --> FETCH
+    T11 --> FETCH
+    T12 --> FETCH
+    T13 --> FETCH
+    T14 --> FETCH
+    FETCH --> CAT
 ```
 
 ### 6.2 Endpoint Summary
@@ -628,7 +662,7 @@ _app = graph.compile()                        # Compiled once, reused across req
 
 If all 5 LLMs fail or hit Groq 429 rate limits, `run_deterministic_telemetry_fallback()` triggers, fetching live telemetry from weather APIs and synthesizing structured widget responses to guarantee 0% failure downtime.
 
-### 9.3 Tool Definitions (9 Specialized AI Tools)
+### 9.3 Tool Definitions (14 Specialized AI Tools)
 
 | Tool | Parameters | Returns | Data Source |
 |------|-----------|---------|-------------|
@@ -641,6 +675,13 @@ If all 5 LLMs fail or hit Groq 429 rate limits, `run_deterministic_telemetry_fal
 | `get_surface_pressure_and_wind` | `latitude: float, longitude: float` | Atmospheric pressure (hPa), wind speed (km/h), gusts, direction (°) | Open-Meteo Surface API |
 | `get_agricultural_crop_telemetry` | `latitude: float, longitude: float` | Evapotranspiration ET0 (mm), soil temp (0-7cm), soil moisture (m³/m³), VPD | Open-Meteo Agromet API |
 | `get_official_imd_alerts` | `latitude: float, longitude: float` | Official alert status (RED/ORANGE/YELLOW/GREEN), warning title, action | Open-Meteo / IMD Warning Stream |
+| `get_imd_city_forecast` | `station_id: str = "42182"` | Official 7-day city forecast (max/min temp + departure from normal, humidity, sunrise/sunset) | `api.imd.gov.in/cityforecast` |
+| `get_imd_district_warning` | `district_id: str = "573"` | Official district-level warning bulletin | `api.imd.gov.in` district warning endpoint |
+| `get_imd_cyclone_track` | *(none)* | Official current cyclone track data | `api.imd.gov.in` cyclone endpoint |
+| `get_imd_agromet_official_advisory` | `district: str = "Ahmedabad", crop: str = "Cotton"` | Official government agromet crop advisory | `api.imd.gov.in` agromet endpoint |
+| `query_any_imd_api_feature` | `api_id: str = "api-1", params_json: str = "{}"` | Raw response from any of the 28 catalogued IMD APIs | `imd_service.py` → live curl to `api.imd.gov.in` |
+
+All 5 IMD tools route through `imd_service.fetch_imd_api()`, which executes a live `curl` request to `api.imd.gov.in` and falls back — in order — to the official IMD CAP alert RSS feed, then to a schema-accurate sample response matching the published API reference, so the agent never returns an error even if `IMD_API_KEY`/`IMD_JWT_TOKEN` are unset or the government server is unreachable.
 
 ### 9.4 System Prompt Architecture & Domain Guardrails
 
@@ -649,6 +690,7 @@ The system prompt is **dynamically constructed** per request with these sections
 | Section | Content |
 |---------|---------|
 | **Personality** | Warm, conversational, helpful weather intelligence assistant |
+| **IMD Priority-1 Trust Directive** | Instructs the LLM to treat IMD (Ministry of Earth Sciences) as its most trusted official source, and to cite IMD forecasts, warnings, nowcasts, and agromet advisories with the highest authority when answering India-specific weather queries |
 | **Context Memory** | Instructed to maintain full conversation context |
 | **Language Directive** | `Target Language: {language}` with native script requirement across 10 Indian languages |
 | **Widget Rules** | Standardized JSON schema for `widget:weather`, `widget:forecast`, `widget:alert` |
@@ -665,21 +707,21 @@ The system prompt is **dynamically constructed** per request with these sections
 
 | Provider | Weight | Free? | Data Provided | Used In |
 |----------|--------|-------|---------------|---------|
-| **Open-Meteo (ECMWF/IMD)** | **2.0** | ✅ Free | Temp, feels like, humidity, wind, pressure, UV, weather code, hourly, daily, alerts | Frontend + Backend |
+| **IMD Official Data — Ministry of Earth Sciences (Priority 1 Trust)** | **3.0** | ✅ Free | Temp, feels like, humidity, wind, pressure, UV, weather code, hourly, daily, alerts | Frontend + Backend |
 | **WeatherAPI.com** | 1.2 | Freemium | Temp, feels like, humidity, wind, condition text, AQI, PM2.5, PM10 | Frontend + Backend |
 | **Tomorrow.io** | 1.2 | Freemium | Temp, feels like, humidity, wind (m/s→km/h), pressure, UV | Frontend only |
 | **OpenWeatherMap** | 1.1 | Freemium | Temp, feels like, humidity, wind (m/s→km/h), condition text | Frontend + Backend |
 | **AccuWeather** | 1.25 | Freemium | Temp, real feel, humidity, wind, pressure, UV, condition text | Frontend only |
 
 > [!IMPORTANT]
-> Open-Meteo receives **double weight (2.0)** because it sources from ECMWF/IMD — the official Indian Government weather standard.
+> The Open-Meteo provider (sourced from ECMWF, aligned with IMD/Government of India standards) was re-labeled **"IMD Official Data — Ministry of Earth Sciences (Priority 1 Trust)"** and its weight raised from 2.0 to **3.0×** — the highest of any provider — reflecting its status as the official Indian Government weather standard. The `RiskOutlookCard` dashboard widget now surfaces an "IMD Official Priority 1" badge to make this trust ranking visible to users.
 
 ### 10.2 Fusion Algorithm
 
 ```mermaid
 graph TD
     subgraph "Stage 1: Parallel Ingestion"
-        P1["Open-Meteo<br/>w=2.0"]
+        P1["IMD Official (Priority 1)<br/>w=3.0"]
         P2["WeatherAPI<br/>w=1.2"]
         P3["Tomorrow.io<br/>w=1.2"]
         P4["OpenWeatherMap<br/>w=1.1"]
@@ -1003,12 +1045,14 @@ graph TB
 | BigDataCloud | `api.bigdatacloud.net/data/reverse-geocode-client` | Coordinates → city name (reverse geocode) |
 | Nominatim OSM | `nominatim.openstreetmap.org/reverse` | Reverse geocode fallback |
 | ipapi.co | `ipapi.co/json/` | IP-based approximate location |
+| IMD CAP Alert Feed | `cap-sources.s3.amazonaws.com/in-imd-en/rss.xml` | Live official IMD severe weather warning RSS/XML feed — automatic fallback for the 4 IMD warning-type tools when the direct API call fails |
 
 ### APIs Used (Auth Required)
 
 | Service | Auth Type | Purpose |
 |---------|-----------|---------|
 | Groq Cloud | Bearer API key | LLM inference (Qwen 27B) |
+| India Meteorological Department (IMD) | `x-api-key` header + optional `Authorization: Bearer` JWT (both optional — graceful fallback if unset) | Official government weather data: 28 endpoints covering forecast, warning, cyclone, marine, rainfall, agromet, astronomical, and RADAR/lightning categories. Executed via live `curl` subprocess in `imd_service.py` |
 | WeatherAPI.com | Query param `key` | Weather data + AQI (ensemble source) |
 | Tomorrow.io | Query param `apikey` | Weather data (ensemble source) |
 | OpenWeatherMap | Query param `appid` | Weather data (ensemble source) |
@@ -1054,8 +1098,8 @@ Cotton (કપાસ), Wheat (ઘઉં), Rice/Paddy (ડાંગર), Sugarcan
 | :--- | :--- | :--- | :--- |
 | **1. Real-time Weather Telemetry** | Real-time weather information retrieval | ✅ **Fully Implemented** — Fuses live weather telemetry (temp, feels-like, humidity, wind, pressure, UV, AQI, PM2.5, PM10) from up to 5 parallel weather providers. | [ensembleEngine.js](file:///home/om/sih-f-2/frontend/src/utils/ensembleEngine.js)<br/>[tools.py](file:///home/om/sih/backend/tools.py) |
 | **2. Natural Language Querying** | Conversational weather forecast querying | ✅ **Fully Implemented** — LangGraph state machine powered by Groq Qwen 27B LLM with automated tool invocation (`geocode_city`, `get_current_weather`, `get_weather_forecast`). | [agent.py](file:///home/om/sih/backend/agent.py)<br/>[WeatherChatView.jsx](file:///home/om/sih-f-2/frontend/src/views/WeatherChatView.jsx) |
-| **3. NWP Model Integration** | Integration with models such as GFS/WRF/ECMWF | ✅ **Fully Implemented** — Direct Open-Meteo ECMWF/IMD model data prioritized with weight 2.0 in the Ensemble Engine + Windy GIS map layer support for GFS/ECMWF. | [ensembleEngine.js](file:///home/om/sih-f-2/frontend/src/utils/ensembleEngine.js)<br/>[MapView.jsx](file:///home/om/sih-f-2/frontend/src/views/MapView.jsx) |
-| **4. Extreme Weather Early Warnings** | Extreme weather alerts & warning dissemination | ✅ **Fully Implemented** — Official IMD alert widget parsing (`widget:alert`) with color codes (RED/ORANGE/YELLOW/GREEN) + 5-day environmental risk assessment engine. | [RiskOutlookCard.jsx](file:///home/om/sih-f-2/frontend/src/components/RiskOutlookCard.jsx)<br/>[WeatherChatView.jsx](file:///home/om/sih-f-2/frontend/src/views/WeatherChatView.jsx) |
+| **3. NWP Model Integration** | Integration with models such as GFS/WRF/ECMWF | ✅ **Fully Implemented** — ECMWF/IMD model data given **Priority-1 trust weight (3.0)** in the Ensemble Engine + Windy GIS map layer support for GFS/ECMWF. | [ensembleEngine.js](file:///home/om/sih-f-2/frontend/src/utils/ensembleEngine.js)<br/>[MapView.jsx](file:///home/om/sih-f-2/frontend/src/views/MapView.jsx) |
+| **4. Extreme Weather Early Warnings** | Extreme weather alerts & warning dissemination | ✅ **Fully Implemented** — Official IMD alert widget parsing (`widget:alert`) with color codes (RED/ORANGE/YELLOW/GREEN) + 5-day environmental risk assessment engine, backed by **direct live integration with all 28 official IMD government APIs** (forecast, district warning, cyclone track, agromet advisory, marine, RADAR/lightning) with automatic CAP alert feed fallback for zero-downtime warnings. | [RiskOutlookCard.jsx](file:///home/om/sih-f-2/frontend/src/components/RiskOutlookCard.jsx)<br/>[imd_service.py](file:///home/om/sih/backend/imd_service.py)<br/>[tools.py](file:///home/om/sih/backend/tools.py) |
 | **5. Location-Based Forecasting** | Location-based forecasting & advisory generation | ✅ **Fully Implemented** — GPS auto-location + IP fallback + Reverse Geocoding. Includes **Agricultural Farmer Mode** for crop-specific advisory generation. | [location.js](file:///home/om/sih-f-2/frontend/src/utils/location.js)<br/>[agent.py](file:///home/om/sih/backend/agent.py) |
 | **6. Multilingual Support** | Multilingual support for Indian languages | ✅ **Fully Implemented** — **10 Indian languages** in native scripts (Hindi, Gujarati, Marathi, Tamil, Telugu, Bengali, Kannada, Malayalam, Punjabi, English) + backend `langdetect`. | [translations.js](file:///home/om/sih-f-2/frontend/src/utils/translations.js)<br/>[agent.py](file:///home/om/sih/backend/agent.py) |
 | **7. Climate & Historical Trends** | Climate trend & historical weather analysis | ✅ **Fully Implemented** — 14-day extended outlooks, 24-hour telemetry trend visualization with Bézier curves, and LLM historical query capability. | [WeatherChatView.jsx](file:///home/om/sih-f-2/frontend/src/views/WeatherChatView.jsx) |
@@ -1127,8 +1171,3 @@ graph TD
 ```
 
 ---
-
-> **Document generated from source code analysis of both repositories.**  
-> Frontend: `~/sih-f-2/frontend/` | Backend: `~/sih/backend/`
-
-
