@@ -361,8 +361,9 @@ graph TD
 
 ### 9.3 System Guardrails
 
-1. **Casual Conversation Allowed**: Friendly greetings, banter, and general inquiries are supported naturally.
-2. **Strict Code Generation Ban**: Explicitly prevents software programming code generation (Python, JS, C++, HTML/CSS, SQL scripts) to enforce domain specialization.
+1. **Strict Weather & Climate Domain Boundary**: Enforces strict domain isolation to weather, climate, meteorology, air quality (AQI), solar UV, IMD alerts, and agricultural farming advisories.
+2. **Non-Weather Query Refusal Policy**: For any off-topic inquiry (e.g. general trivia, coding/programming, sports, history, politics, or unrelated topics), WeatherGPT politely declines in the target language:
+   > *"Sorry, I do not contain any other data than weather, climate, air quality, and agricultural information. How can I help you with weather forecasts or farming advisories today?"*
 3. **Farmer Mode Session Isolation**: When Farmer Mode is toggled off, agricultural prompt rules are cleared to prevent context bleeding.
 
 ---

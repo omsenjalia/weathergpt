@@ -69,3 +69,19 @@ def test_chat_endpoint_schema():
     data = response.json()
     assert "response" in data
     assert isinstance(data["response"], str)
+
+def test_non_weather_guardrail():
+    """Verify non-weather messages receive domain boundary refusal."""
+    payload = {
+        "messages": [{"role": "user", "content": "Can you write a Python script to sort a list?"}],
+        "location": "New Delhi",
+        "language": "English",
+        "farmer_mode": False,
+        "crop": ""
+    }
+    response = client.post("/chat", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert "response" in data
+    assert "weather" in data["response"].lower() or "sorry" in data["response"].lower()
+
