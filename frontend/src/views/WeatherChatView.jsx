@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { ArrowRight, Loader2, Mic, Sun, ShieldAlert, Droplets, Wind, Thermometer, CloudSun, Cloud, CloudFog, CloudDrizzle, CloudRain, CloudSnow, CloudLightning, Volume2, VolumeX, MapPin, Search, Eye, Compass, Sunrise, Sunset, Gauge } from 'lucide-react'
-import { sendMessage, getWeatherByCoords, getAirQualityByCoords, getIMDAlertBulletin } from '../api'
+import { sendMessage, getWeatherByCoords, getAirQualityByCoords, getIMDAlertBulletin, geocodeCity } from '../api'
 import { Translations, translateCondition } from '../utils/translations'
 import PromptRotator from '../components/PromptRotator'
 import WeatherMarquee from '../components/WeatherMarquee'
@@ -470,11 +470,26 @@ function WeatherDashboardCard({
         Math.round(weather.temp + 4),
       ]
 
-  const handleCitySearchSubmit = (e) => {
+  const handleCitySearchSubmit = async (e) => {
     e.preventDefault()
     if (!searchQuery.trim() || !onSelectLocation) return
-    onSelectLocation({ name: searchQuery.trim(), country: 'India', lat: 20.5937, lon: 78.9629 })
+    const query = searchQuery.trim()
     setSearchQuery('')
+    try {
+      const geo = await geocodeCity(query)
+      if (geo) {
+        onSelectLocation({
+          name: geo.name || query,
+          country: geo.country || '',
+          lat: geo.latitude,
+          lon: geo.longitude,
+        })
+      } else {
+        onSelectLocation({ name: query, country: '', lat: 20.5937, lon: 78.9629 })
+      }
+    } catch {
+      onSelectLocation({ name: query, country: '', lat: 20.5937, lon: 78.9629 })
+    }
   }
 
   return (

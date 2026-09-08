@@ -127,7 +127,6 @@ export default function Sidebar({
           {[
             { id: 'home', label: Translations.get(langCode, 'navWeather') || 'Weather' },
             { id: 'map', label: Translations.get(langCode, 'navMap') || 'Map' },
-            { id: 'architecture', label: 'Architecture Map' },
           ].map((item) => {
             const isActive = activeView === item.id
             return (
