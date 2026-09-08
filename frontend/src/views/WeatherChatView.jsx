@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import axios from 'axios'
 import { ArrowRight, Loader2, Mic, Sun, ShieldAlert, Droplets, Wind, Thermometer, CloudSun, Cloud, CloudFog, CloudDrizzle, CloudRain, CloudSnow, CloudLightning, Volume2, VolumeX, MapPin, Search, Eye, Compass, Sunrise, Sunset, Gauge } from 'lucide-react'
 import { sendMessage, getWeatherByCoords, getAirQualityByCoords, getIMDAlertBulletin, geocodeCity } from '../api'
 import { Translations, translateCondition } from '../utils/translations'
@@ -426,6 +427,8 @@ function WeatherDashboardCard({
 }) {
   const [activeTab, setActiveTab] = useState('overview')
   const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState([])
+  const [searching, setSearching] = useState(false)
   const [closestCities, setClosestCities] = useState([])
 
   if (!weather) return null
@@ -470,11 +473,58 @@ function WeatherDashboardCard({
         Math.round(weather.temp + 4),
       ]
 
+  // Live autocomplete search popup suggestions
+  useEffect(() => {
+    if (!searchQuery.trim() || searchQuery.trim().length < 2) {
+      setSearchResults([])
+      return
+    }
+
+    const timer = setTimeout(async () => {
+      setSearching(true)
+      try {
+        const res = await axios.get('https://geocoding-api.open-meteo.com/v1/search', {
+          params: { name: searchQuery.trim(), count: 6, language: 'en' },
+        })
+        const items = (res.data.results || []).map((item) => ({
+          name: item.name,
+          country: item.country || '',
+          state: item.admin1 || '',
+          lat: item.latitude,
+          lon: item.longitude,
+        }))
+        setSearchResults(items)
+      } catch (err) {
+        console.error('Search popup error:', err)
+      } finally {
+        setSearching(false)
+      }
+    }, 250)
+
+    return () => clearTimeout(timer)
+  }, [searchQuery])
+
   const handleCitySearchSubmit = async (e) => {
     e.preventDefault()
     if (!searchQuery.trim() || !onSelectLocation) return
     const query = searchQuery.trim()
+
+    // If suggestions are available, pick the first top matching suggestion
+    if (searchResults.length > 0) {
+      const topMatch = searchResults[0]
+      onSelectLocation({
+        name: topMatch.name,
+        country: topMatch.country || '',
+        lat: topMatch.lat,
+        lon: topMatch.lon,
+      })
+      setSearchQuery('')
+      setSearchResults([])
+      return
+    }
+
     setSearchQuery('')
+    setSearchResults([])
     try {
       const geo = await geocodeCity(query)
       if (geo) {
@@ -496,17 +546,64 @@ function WeatherDashboardCard({
     <div className="w-full max-w-4xl mx-auto text-left flex flex-col gap-2.5">
       {/* Top Bar: Search Location & Minimalist Tab Switcher */}
       <div className="flex flex-wrap items-center justify-between gap-2 bg-white/[0.02] border border-white/[0.06] rounded-2xl p-2 backdrop-blur-md">
-        {/* City Search Box */}
-        <form onSubmit={handleCitySearchSubmit} className="relative flex items-center min-w-[200px] flex-1 sm:flex-none">
-          <Search size={14} className="absolute left-3 text-white/40" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder={t('searchLocation') || 'Search city...'}
-            className="w-full bg-white/[0.04] border border-white/[0.08] rounded-xl pl-8 pr-3 py-1.5 text-xs text-white placeholder-white/30 focus:outline-none focus:border-white/20 transition-all"
-          />
-        </form>
+        {/* City Search Box with Live Autocomplete Suggestions Popup */}
+        <div className="relative min-w-[220px] flex-1 sm:flex-none">
+          <form onSubmit={handleCitySearchSubmit} className="relative flex items-center w-full">
+            <Search size={14} className="absolute left-3 text-white/40" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder={t('searchLocation') || 'Search city (e.g. Anand, Jaipur)...'}
+              className="w-full bg-white/[0.04] border border-white/[0.08] rounded-xl pl-8 pr-7 py-1.5 text-xs text-white placeholder-white/30 focus:outline-none focus:border-accent/40 transition-all"
+            />
+            {searching ? (
+              <Loader2 size={12} className="absolute right-2.5 text-accent animate-spin" />
+            ) : searchQuery ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchQuery('')
+                  setSearchResults([])
+                }}
+                className="absolute right-2 text-white/40 hover:text-white text-xs cursor-pointer p-0.5"
+              >
+                ✕
+              </button>
+            ) : null}
+          </form>
+
+          {/* Autocomplete Suggestions Dropdown Popup */}
+          {searchResults.length > 0 && (
+            <div className="absolute top-full left-0 right-0 mt-1.5 z-50 bg-neutral-900/95 border border-white/20 rounded-2xl shadow-2xl backdrop-blur-2xl overflow-hidden py-1 divide-y divide-white/5 max-h-56 overflow-y-auto no-scrollbar">
+              {searchResults.map((item, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  onClick={() => {
+                    onSelectLocation({
+                      name: item.name,
+                      country: item.country || '',
+                      lat: item.lat,
+                      lon: item.lon,
+                    })
+                    setSearchQuery('')
+                    setSearchResults([])
+                  }}
+                  className="w-full text-left px-3 py-2 text-xs hover:bg-white/10 flex items-center justify-between transition-colors cursor-pointer"
+                >
+                  <div className="flex items-center gap-2 truncate">
+                    <MapPin size={12} className="text-accent shrink-0" />
+                    <span className="font-semibold text-white truncate">{item.name}</span>
+                    <span className="text-[10px] text-white/50 truncate">
+                      {item.state ? `${item.state}, ` : ''}{item.country}
+                    </span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
 
         {/* Navigation Tabs */}
         <div className="flex items-center gap-1.5 text-xs font-medium">
