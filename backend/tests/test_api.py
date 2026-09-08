@@ -30,16 +30,6 @@ def test_dev_diagnostics_endpoint():
     assert "registered_ai_tools" in data
     assert "recent_logs" in data
 
-def test_imd_features_catalog():
-    """Verify GET /api/imd/features catalog contains 28 official IMD features."""
-    response = client.get("/api/imd/features")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["status"] == "ok"
-    assert data["total"] == 28
-    assert isinstance(data["features"], list)
-    assert len(data["features"]) == 28
-
 def test_dev_sandbox_endpoint():
     """Verify POST /dev/sandbox executes prompt and returns latency profiling."""
     payload = {

@@ -82,7 +82,7 @@ export default function RiskOutlookCard({ forecast = [], langCode = 'en' }) {
           </h3>
         </div>
         <span className="text-[10px] text-amber-300 font-bold bg-amber-500/20 px-2 py-0.5 rounded-full border border-amber-500/30 flex items-center gap-1">
-          IMD Official Priority 1
+          Live Telemetry Priority 1
         </span>
       </div>
 
