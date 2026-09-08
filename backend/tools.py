@@ -97,10 +97,10 @@ def get_current_weather(latitude: float, longitude: float) -> dict:
     try:
         sources = []
         with httpx.Client(timeout=10) as client:
-            # 0. IMD Official Data (India Meteorological Department - Government of India) -> Highest Trust Weight 3.0
+            # 0. IMD Official Data (India Meteorological Department - Government of India) -> Highest Trust Weight 3.0 (Only when live authenticated IMD response is active)
             try:
                 imd_res = fetch_imd_api("api-3", {"lat": str(latitude), "lon": str(longitude)})
-                if imd_res and "data" in imd_res:
+                if imd_res and imd_res.get("is_live_imd_server") and "data" in imd_res:
                     imd_data = imd_res["data"]
                     if isinstance(imd_data, list) and len(imd_data) > 0:
                         obs = imd_data[0]
