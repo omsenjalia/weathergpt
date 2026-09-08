@@ -1,73 +1,48 @@
 # WeatherGPT 🌤️
 
-A premium dark glassmorphism weather assistant for India featuring conversational AI, animated weather backgrounds, multi-view navigation, and a **Multi-Source Ensemble Fusion Weather Engine**.
+> **SIH Problem Statement & Project Overview**: AI-Powered Multilingual Weather Intelligence Assistant for India  
+> **Context**: Smart India Hackathon (SIH) Presentation & Production System  
+> **Stack**: React 19 · FastAPI · LangGraph AI Agent · Groq LPU Cascade · TailwindCSS 3.4
 
-![React](https://img.shields.io/badge/React-18-blue)
+![React](https://img.shields.io/badge/React-19.2-blue)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115-green)
+![LangGraph](https://img.shields.io/badge/LangGraph-0.2.28-orange)
 ![Tailwind](https://img.shields.io/badge/Tailwind-3.4-blue)
-![Framer Motion](https://img.shields.io/badge/Framer_Motion-11-purple)
+![Groq](https://img.shields.io/badge/Groq_Cloud-Qwen_27B-purple)
 
 ---
 
 ## 🌟 Key Features
 
-- **Multi-Source Ensemble Weather Engine** — Fuses telemetry in real-time across top meteorological providers (**Open-Meteo ECMWF/GFS**, **WeatherAPI.com**, **Tomorrow.io**, **OpenWeatherMap**, **AccuWeather**) for unmatched precision.
-- **Zero-Config Out-of-the-Box** — Works instantly using free high-precision physics models (ECMWF, ICON, GFS) with zero API keys required.
-- **Simple Key Configuration** — Configure optional provider keys easily via environment variables (`.env`).
-- **Conversational AI Weather** — Ask about weather in any Indian city in English, Hindi, Gujarati, Tamil, Bengali, Telugu, Marathi, Kannada, Malayalam, Punjabi, etc.
-- **Fully Accessible Mobile UX** — Header hamburger navigation drawer + floating bottom dock (auto-hides on Chat view for unobstructed chat input).
-- **Developer Telemetry Dashboard (`/dev`)** — Comprehensive diagnostics control panel accessible via `/dev` URL or `Shift + D` key shortcut. Displays server uptime, memory/CPU usage, API latency benchmarker, multi-provider ensemble debugger, and live error log console.
-- **Live Animated Weather Map** — Windy.com map integration for real-time wind and radar visualization.
+- **Multi-Source Ensemble Fusion Engine** — Fuses telemetry in real-time across 5 meteorological providers (**Open-Meteo ECMWF/IMD standard model**, **WeatherAPI.com**, **Tomorrow.io**, **OpenWeatherMap**, **AccuWeather**) for high-precision weather metrics.
+- **Conversational AI Agent (LangGraph)** — Stateful ReAct agent powered by a **5-model Groq LLM cascade** (`Qwen 27B` → `Llama 3.1 8B` → `Llama 3.3 70B` → `Mixtral` → `Gemma 2`) with deterministic telemetry fallback for zero downtime.
+- **10 Indian Languages i18n Engine** — Full native script UI rendering and browser Web Speech API (TTS & STT) support for Hindi, Gujarati, Marathi, Tamil, Telugu, Bengali, Kannada, Malayalam, Punjabi, and English.
+- **Agricultural Farmer Advisory Mode** — Crop-specific guidance (Wheat, Cotton, Rice, Sugarcane, Groundnut, Mustard, Vegetables) covering irrigation timing, pesticide spraying windows, thermal/frost stress, and harvest safety.
+- **5-Day Environmental Risk Outlook Engine** — Automated hazard classification card (`RiskOutlookCard.jsx`) with 3-tier severity color coding (RED / YELLOW / GREEN) and threshold warning triggers.
+- **Rich Interactive UI Widgets** — Markdown widget parser rendering dynamic React components (`widget:weather`, `widget:forecast`, `widget:alert`).
+- **Developer Diagnostic Control Panel (`/dev`)** — A 9-tab developer view accessible via `/dev` or `Shift + D` key shortcut, featuring CPU/RAM profiling, multi-city stress testing, hazard simulator, and AI sandbox.
+- **Live Interactive Windy GIS Map** — Embedded Windy map engine with 7 overlay toggles (wind, rain, temperature, clouds, radar, waves, pressure).
+
+---
+
+## 📌 Architecture Documentation
+
+For complete technical specifications, data flows, API contracts, and SIH compliance matrix, refer to the official architecture annex:
+- 📖 [**Architecture & Technical Specifications Annex (`Architecture.md`)**](file:///home/om/sih/frontend/Architecture.md)
 
 ---
 
 ## 🌐 Multi-Source Weather Providers & API Key Guide
 
-WeatherGPT automatically blends active providers to compute a weighted temperature, humidity, pressure, and wind mean, while applying max-risk rain prediction logic.
+WeatherGPT automatically blends active providers to compute weighted mean temperature, humidity, pressure, and wind speed.
 
-### Environment Variable Names & Provider Guide
-
-| Provider | Environment Variable (Frontend / Backend) | Update Refresh Rate | Grid Resolution | Key Setup Guide & Link |
-| :--- | :--- | :--- | :--- | :--- |
-| **Open-Meteo** | *Built-in (No key needed)* | Hourly / 6h | 9 km (ECMWF) / 7 km (ICON) | **Default Base Engine** — Free forever, zero configuration required. [open-meteo.com](https://open-meteo.com) |
-| **WeatherAPI.com** | `VITE_WEATHERAPI_KEY` / `WEATHERAPI_KEY` | 10–15 mins | ~1 km | 1. Sign up at [weatherapi.com/signup](https://www.weatherapi.com/signup.aspx)<br>2. Copy your API Key from Dashboard<br>3. Free Tier: **1,000,000 requests/month** |
-| **Tomorrow.io** | `VITE_TOMORROW_KEY` / `TOMORROW_KEY` | 1–15 mins | 100 meters | 1. Sign up at [tomorrow.io/weather-api](https://www.tomorrow.io/weather-api/)<br>2. Copy your API key from your developer portal<br>3. Free Tier: **500 requests/day** |
-| **OpenWeatherMap** | `VITE_OPENWEATHER_KEY` / `OPENWEATHER_KEY` | 10 mins | 1–5 km | 1. Sign up at [openweathermap.org](https://home.openweathermap.org/users/sign_up)<br>2. Generate an API key under API Keys section<br>3. Free Tier: **1,000 requests/day** |
-| **AccuWeather** | `VITE_ACCUWEATHER_KEY` / `ACCUWEATHER_KEY` | Real-time | ~1 km | 1. Create an account at [developer.accuweather.com](https://developer.accuweather.com/)<br>2. Create an App under "My Apps" to obtain an API Key<br>3. Free Tier: **50 requests/day** |
-
----
-
-## 🛠️ Environment Variables Reference
-
-### Backend (`backend/.env`)
-
-```env
-# Required for AI Chatbot
-GROQ_API_KEY=your_groq_api_key_here
-GROQ_MODEL=qwen/qwen3.8-27b  # Optional override model
-
-# Optional Multi-Provider Keys (Ensemble Weather Agent)
-WEATHERAPI_KEY=your_weatherapi_key
-TOMORROW_KEY=your_tomorrow_key
-OPENWEATHER_KEY=your_openweather_key
-ACCUWEATHER_KEY=your_accuweather_key
-```
-
-### Frontend (`frontend/.env`)
-
-```env
-# Backend API Endpoint URL
-VITE_API_URL=http://localhost:8888
-
-# Optional Multi-Provider Keys (Frontend Ensemble Engine)
-VITE_WEATHERAPI_KEY=your_weatherapi_key
-VITE_TOMORROW_KEY=your_tomorrow_key
-VITE_OPENWEATHER_KEY=your_openweather_key
-VITE_ACCUWEATHER_KEY=your_accuweather_key
-
-# Optional Map Key
-VITE_WINDY_API_KEY=your_windy_key
-```
+| Provider | Environment Variable (Frontend / Backend) | Grid Resolution | Setup Guide |
+| :--- | :--- | :--- | :--- |
+| **Open-Meteo (Priority 1)** | *Built-in (Zero key required)* | 9 km (ECMWF / IMD standard) | **Default Base Source** — Free forever, no registration needed. [open-meteo.com](https://open-meteo.com) |
+| **WeatherAPI.com** | `VITE_WEATHERAPI_KEY` / `WEATHERAPI_KEY` | ~1 km | Sign up at [weatherapi.com](https://www.weatherapi.com/signup.aspx). Free tier: **1,000,000 req/mo** |
+| **Tomorrow.io** | `VITE_TOMORROW_KEY` / `TOMORROW_KEY` | 100 meters | Sign up at [tomorrow.io](https://www.tomorrow.io/weather-api/). Free tier: **500 req/day** |
+| **OpenWeatherMap** | `VITE_OPENWEATHER_KEY` / `OPENWEATHER_KEY` | 1–5 km | Sign up at [openweathermap.org](https://home.openweathermap.org/users/sign_up). Free tier: **1,000 req/day** |
+| **AccuWeather** | `VITE_ACCUWEATHER_KEY` / `ACCUWEATHER_KEY` | ~1 km | Sign up at [developer.accuweather.com](https://developer.accuweather.com/). Free tier: **50 req/day** |
 
 ---
 
@@ -82,10 +57,10 @@ VITE_WINDY_API_KEY=your_windy_key
 
 ```bash
 cd backend
-python -m venv venv
+python3 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env     # Add your GROQ_API_KEY
+cp .env.example .env     # Set your GROQ_API_KEY
 uvicorn main:app --reload --port 8888
 ```
 
@@ -94,6 +69,7 @@ uvicorn main:app --reload --port 8888
 ```bash
 cd frontend
 npm install
+cp .env.example .env
 npm run dev
 ```
 
@@ -101,34 +77,57 @@ Open [http://localhost:5173](http://localhost:5173) in your browser.
 
 ---
 
-## 🏗️ Architecture & Project Structure
+## 🏗️ Repository Structure
 
 ```
-weathergpt/
-├── backend/
-│   ├── main.py          # FastAPI server (/chat and /health endpoints)
-│   ├── agent.py         # LangGraph ReAct agent with Groq LLM
-│   ├── tools.py         # Multi-source weather tools & geocoding
-│   └── requirements.txt # Python dependencies
-├── frontend/
-│   ├── src/
-│   │   ├── App.jsx                   # Root layout, routing & mobile header menu
-│   │   ├── api.js                    # API client & IMD alert evaluator
-│   │   ├── utils/
-│   │   │   ├── ensembleEngine.js     # Multi-Source Telemetry Fusion Engine
-│   │   │   └── translations.js       # Multilingual translations
-│   │   ├── views/
-│   │   │   ├── WeatherHome.jsx       # Weather dashboard with fused telemetry chips
-│   │   │   ├── ChatView.jsx          # AI conversation interface
-│   │   │   ├── VoiceView.jsx         # Voice assistant
-│   │   │   └── MapView.jsx           # Animated Windy map
-│   │   └── components/
-│   │       ├── ApiSettingsModal.jsx  # In-app API Key Settings Modal
-│   │       ├── LocationPickerModal.jsx
-│   │       ├── LanguagePickerModal.jsx
-│   │       ├── BottomDock.jsx
-│   │       └── Sidebar.jsx
-└── README.md
+sih/
+├── backend/                            # FastAPI Python Server
+│   ├── main.py                         # FastAPI endpoints & logging middleware
+│   ├── agent.py                        # LangGraph agent graph & model cascade
+│   ├── tools.py                        # 14 Specialized AI telemetry tools
+│   ├── imd_service.py                  # Public CAP alert feed & sample schemas
+│   ├── requirements.txt                # Python backend dependencies
+│   └── tests/
+│       └── test_api.py                 # Automated pytest test suite
+├── frontend/                           # React 19 Client SPA
+│   ├── index.html                      # HTML entry point & font links
+│   ├── package.json                    # Node dependencies & build scripts
+│   ├── Architecture.md                 # SIH Architecture & Specifications Annex
+│   └── src/
+│       ├── main.jsx                    # Application mounting root
+│       ├── App.jsx                     # Top-level view router & state
+│       ├── api.js                      # Centralized API service layer
+│       ├── views/
+│       │   ├── WeatherChatView.jsx     # Main AI chat & weather dashboard
+│       │   ├── MapView.jsx             # Interactive Windy GIS map view
+│       │   ├── DevView.jsx             # 9-Tab developer diagnostic suite
+│       │   ├── IMDHubView.jsx          # Official IMD feature explorer
+│       │   └── ExcalidrawArchitectureView.jsx # Architecture diagram viewer
+│       ├── components/
+│       │   ├── Sidebar.jsx             # Navigation drawer & crop selector
+│       │   ├── LocationPickerModal.jsx # GPS & city search modal
+│       │   ├── LanguagePickerModal.jsx # 10-language selector modal
+│       │   ├── RiskOutlookCard.jsx     # 5-day risk assessment card
+│       │   ├── PromptRotator.jsx       # Dynamic regional prompt suggestions
+│       │   └── WeatherMarquee.jsx      # Multi-city weather marquee ticker
+│       └── utils/
+│           ├── ensembleEngine.js       # Multi-source weather fusion engine
+│           ├── location.js             # GPS / IP / Reverse geocoding module
+│           ├── speechEngine.js         # Web Speech API wrapper
+│           └── translations.js         # 10-Language i18n translation dictionary
+├── AGENT.md                            # Agent developer guidelines
+└── README.md                           # Project documentation
+```
+
+---
+
+## 🧪 Running Tests
+
+### Backend Test Suite
+
+```bash
+cd backend
+pytest
 ```
 
 ---

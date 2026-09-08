@@ -568,13 +568,14 @@ graph LR
     end
 
     subgraph "Phase 3 Roadmap (2027)"
-        R4["IoT Hardware Sensor Mesh<br/>(LoRaWAN Field Weather Station Data)"]
-        R5["Fine-Tuned Small Language Model<br/>(SLM for offline regional dialect chat)"]
+        R4["📱 Flutter Android & iOS Native App<br/>(Cross-platform mobile client with push alerts)"]
+        R5["🎙️ Voice-First AI Assistant<br/>(Hands-free wake-word & full-duplex speech)"]
+        R6["IoT Hardware Sensor Mesh<br/>(LoRaWAN Field Weather Station Data)"]
     end
 
     R1 --> R4
-    R2 --> R4
-    R3 --> R5
+    R2 --> R5
+    R3 --> R6
 ```
 
 ### 19.1 Direct Government IMD Portal API Suite (`api.imd.gov.in`)
@@ -593,3 +594,11 @@ graph LR
 ### 19.4 Micro-Local IoT Sensor Mesh Integration
 - **Status**: [🚀 Planned]
 - **Overview**: Ingesting real-time field telemetry from low-cost LoRaWAN hardware weather stations deployed at Krishi Vigyan Kendras (KVKs) to ground-truth satellite weather models with localized soil moisture and leaf wetness readings.
+
+### 19.5 Cross-Platform Android & iOS Mobile Application (Flutter)
+- **Status**: [🚀 Planned — Mobile Application Roadmap]
+- **Overview**: Developing a high-performance, cross-platform native mobile application built with **Flutter** (Dart) for Android and iOS devices. The mobile app will feature native push notification integration for real-time IMD severe weather alerts, background GPS location tracking, offline cached weather cards, and native device hardware speech integration.
+
+### 19.6 Voice-First Conversational AI Assistant
+- **Status**: [🚀 Planned — Voice-First Paradigm]
+- **Overview**: Transitioning WeatherGPT into a **Voice-First AI Assistant** designed for maximum accessibility in rural communities. Planned voice-first capabilities include hands-free wake-word detection (*"Hey WeatherGPT"*), full-duplex continuous speech streaming, on-device neural Text-to-Speech (TTS) for 10 Indian regional dialects, and instant voice-guided agricultural advisory routines.
