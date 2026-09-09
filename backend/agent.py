@@ -45,12 +45,11 @@ GROQ_MODEL = os.getenv("GROQ_MODEL", "qwen/qwen3.8-27b")
 
 # Configure primary LLM and multi-provider/multi-model fallbacks for 0% downtime
 primary_llm = ChatGroq(model=GROQ_MODEL, temperature=0, max_retries=2).bind_tools(TOOLS)
-fallback_1 = ChatGroq(model="llama-3.1-8b-instant", temperature=0, max_retries=2).bind_tools(TOOLS)
-fallback_2 = ChatGroq(model="llama-3.3-70b-versatile", temperature=0, max_retries=2).bind_tools(TOOLS)
-fallback_3 = ChatGroq(model="mixtral-8x7b-32768", temperature=0, max_retries=2).bind_tools(TOOLS)
-fallback_4 = ChatGroq(model="gemma2-9b-it", temperature=0, max_retries=2).bind_tools(TOOLS)
+fallback_1 = ChatGroq(model="groq/compound", temperature=0, max_retries=2).bind_tools(TOOLS)
+fallback_2 = ChatGroq(model="qwen/qwen3.6-27b", temperature=0, max_retries=2).bind_tools(TOOLS)
+fallback_3 = ChatGroq(model="groq/compound-mini", temperature=0, max_retries=2).bind_tools(TOOLS)
 
-llm = primary_llm.with_fallbacks([fallback_1, fallback_2, fallback_3, fallback_4])
+llm = primary_llm.with_fallbacks([fallback_1, fallback_2, fallback_3])
 
 
 def agent_node(state: AgentState):
@@ -82,8 +81,29 @@ _app = _build_graph()
 def run_deterministic_telemetry_fallback(location_str: str = "New Delhi", query: str = "", language: str = "English") -> str:
     """Zero-error deterministic synthesizer: Fetches live weather directly if all LLMs fail or hit rate limits."""
     try:
-        city_name = location_str.split(",")[0].strip() if location_str and "Farmer" not in location_str else "New Delhi"
-        geo = geocode_city.invoke(city_name)
+        import re
+        target_city = ""
+        geo = None
+
+        if query and query.strip():
+            # Try extracting city name from query (e.g. "weather in rajkot", "rajkot weather", "temperature of mumbai")
+            match = re.search(r'(?:in|of|at|for)\s+([A-Za-z\s]+)', query, re.IGNORECASE)
+            candidate = match.group(1).strip() if match else ""
+            if not candidate:
+                candidate = re.sub(r'(?i)\b(weather|temperature|temp|forecast|climate|telemetry|report|condition|sky|live|in|of|at|for|the|tell|me|about|how|is|what|like|today|tomorrow|now|current|city)\b', '', query).strip()
+
+            if candidate and len(candidate) >= 2:
+                geo_attempt = geocode_city.invoke(candidate)
+                if isinstance(geo_attempt, dict) and geo_attempt.get("latitude") and not geo_attempt.get("error"):
+                    geo = geo_attempt
+                    target_city = geo_attempt.get("city", candidate)
+
+        if not target_city:
+            city_name = location_str.split(",")[0].strip() if location_str and "Farmer" not in location_str else "New Delhi"
+            geo = geocode_city.invoke(city_name)
+        else:
+            city_name = target_city
+
         if isinstance(geo, dict) and (geo.get("error") or not geo.get("latitude")):
             geo = geocode_city.invoke("New Delhi")
             city_name = "New Delhi"
@@ -242,16 +262,7 @@ FORMATTING & RICH WIDGET RULES:
         return result["messages"][-1].content
     except Exception as exc:
         err_msg = str(exc).lower()
-        print(f"[Agent Warning] Primary cascade failed ({err_msg}). Engaging direct high-capacity model...")
+        print(f"[Agent Warning] LLM cascade exception ({err_msg}). Engaging Deterministic Telemetry Synthesizer...")
+        return run_deterministic_telemetry_fallback(clean_location, last_user_msg, language)
 
-        # Fast sub-agent attempt with Llama-3.1-8b-instant (14,400 RPM allowance)
-        try:
-            fast_llm = ChatGroq(model="llama-3.1-8b-instant", temperature=0).bind_tools(TOOLS)
-            fast_app = _build_graph()
-            res = fast_app.invoke({"messages": formatted_messages})
-            return res["messages"][-1].content
-        except Exception as sub_exc:
-            print(f"[Agent Fallback] Secondary model failed ({sub_exc}). Engaging Deterministic Telemetry Synthesizer...")
-            # Zero-error fallback: Fetch live telemetry directly and render rich widgets
-            return run_deterministic_telemetry_fallback(user_location, last_user_msg, language)
 

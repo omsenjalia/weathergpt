@@ -545,7 +545,7 @@ function WeatherDashboardCard({
   return (
     <div className="w-full max-w-4xl mx-auto text-left flex flex-col gap-2.5">
       {/* Top Bar: Search Location & Minimalist Tab Switcher */}
-      <div className="flex flex-wrap items-center justify-between gap-2 bg-white/[0.02] border border-white/[0.06] rounded-2xl p-2 backdrop-blur-md">
+      <div className="relative z-30 flex flex-wrap items-center justify-between gap-2 bg-white/[0.02] border border-white/[0.06] rounded-2xl p-2 backdrop-blur-md">
         {/* City Search Box with Live Autocomplete Suggestions Popup */}
         <div className="relative min-w-[220px] flex-1 sm:flex-none">
           <form onSubmit={handleCitySearchSubmit} className="relative flex items-center w-full">
@@ -575,7 +575,7 @@ function WeatherDashboardCard({
 
           {/* Autocomplete Suggestions Dropdown Popup */}
           {searchResults.length > 0 && (
-            <div className="absolute top-full left-0 right-0 mt-1.5 z-50 bg-neutral-900/95 border border-white/20 rounded-2xl shadow-2xl backdrop-blur-2xl overflow-hidden py-1 divide-y divide-white/5 max-h-56 overflow-y-auto no-scrollbar">
+            <div className="absolute top-full left-0 right-0 sm:min-w-[280px] mt-1.5 z-50 bg-neutral-950/95 border border-accent/40 rounded-2xl shadow-2xl backdrop-blur-2xl overflow-hidden py-1 divide-y divide-white/10 max-h-56 overflow-y-auto no-scrollbar">
               {searchResults.map((item, idx) => (
                 <button
                   key={idx}
@@ -590,7 +590,7 @@ function WeatherDashboardCard({
                     setSearchQuery('')
                     setSearchResults([])
                   }}
-                  className="w-full text-left px-3 py-2 text-xs hover:bg-white/10 flex items-center justify-between transition-colors cursor-pointer"
+                  className="w-full text-left px-3 py-2 text-xs hover:bg-accent/20 flex items-center justify-between transition-colors cursor-pointer"
                 >
                   <div className="flex items-center gap-2 truncate">
                     <MapPin size={12} className="text-accent shrink-0" />
