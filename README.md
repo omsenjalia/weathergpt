@@ -2,20 +2,20 @@
 
 > **SIH Problem Statement & Project Overview**: AI-Powered Multilingual Weather Intelligence Assistant for India  
 > **Context**: Smart India Hackathon (SIH) Presentation & Production System  
-> **Stack**: React 19 · FastAPI · LangGraph AI Agent · Groq LPU Cascade · TailwindCSS 3.4
+> **Stack**: React 19 · FastAPI · LangGraph AI Agent · Groq 8-Model Cascade · TailwindCSS 3.4
 
 ![React](https://img.shields.io/badge/React-19.2-blue)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115-green)
 ![LangGraph](https://img.shields.io/badge/LangGraph-0.2.28-orange)
 ![Tailwind](https://img.shields.io/badge/Tailwind-3.4-blue)
-![Groq](https://img.shields.io/badge/Groq_Cloud-Qwen_27B-purple)
+![Groq](https://img.shields.io/badge/Groq_Cloud-GPT--OSS_120B-purple)
 
 ---
 
 ## 🌟 Key Features
 
 - **Multi-Source Ensemble Fusion Engine** — Fuses telemetry in real-time across 5 meteorological providers (**Open-Meteo ECMWF/IMD standard model**, **WeatherAPI.com**, **Tomorrow.io**, **OpenWeatherMap**, **AccuWeather**) for high-precision weather metrics.
-- **Conversational AI Agent (LangGraph)** — Stateful ReAct agent powered by a **5-model Groq LLM cascade** (`Qwen 27B` → `Llama 3.1 8B` → `Llama 3.3 70B` → `Mixtral` → `Gemma 2`) with deterministic telemetry fallback for zero downtime.
+- **Conversational AI Agent (LangGraph)** — Stateful ReAct agent powered by **`openai/gpt-oss-120b`** and an **8-model Groq LLM cascade** (`gpt-oss-120b` → `qwen3.8-27b` → `qwen3.6-27b` → `gpt-oss-20b` → `gpt-oss-safeguard-20b` → `groq/compound` → `groq/compound-mini` → `allam-2-7b`) with smart Indic postposition city extraction (`kolkata ma`, `mumbai me`, `delhi nu`) and deterministic telemetry fallback for 0% downtime.
 - **10 Indian Languages i18n Engine** — Full native script UI rendering and browser Web Speech API (TTS & STT) support for Hindi, Gujarati, Marathi, Tamil, Telugu, Bengali, Kannada, Malayalam, Punjabi, and English.
 - **Agricultural Farmer Advisory Mode** — Crop-specific guidance (Wheat, Cotton, Rice, Sugarcane, Groundnut, Mustard, Vegetables) covering irrigation timing, pesticide spraying windows, thermal/frost stress, and harvest safety.
 - **5-Day Environmental Risk Outlook Engine** — Automated hazard classification card (`RiskOutlookCard.jsx`) with 3-tier severity color coding (RED / YELLOW / GREEN) and threshold warning triggers.

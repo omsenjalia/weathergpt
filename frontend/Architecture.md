@@ -40,7 +40,7 @@
 > **Production vs. Roadmap Transparency**: WeatherGPT is built with a resilient, live architecture. Live weather telemetry and official model outputs (ECMWF/IMD high-resolution datasets) are ingested via multi-source ensemble fusion and public government alert streams. Planned proprietary API key connections to government portals (e.g., direct key-authenticated `api.imd.gov.in` endpoints pending approval) are fully specified in [Section 19: Future Roadmap](#19-future-roadmap--planned-enhancements).
 
 ### Core Innovations & Key Differentiators
-- **Conversational AI Agent**: Driven by a stateful **LangGraph** orchestration graph and a **5-model Groq LLM cascade** (`Qwen 27B` → `Llama 3.1 8B` → `Llama 3.3 70B` → `Mixtral 8x7B` → `Gemma 2 9B`) with 0ms deterministic telemetry fallback for zero downtime.
+- **Conversational AI Agent**: Driven by a stateful **LangGraph** orchestration graph and an **8-model Groq LLM cascade** (`openai/gpt-oss-120b` → `qwen3.8-27b` → `qwen3.6-27b` → `gpt-oss-20b` → `gpt-oss-safeguard-20b` → `groq/compound` → `groq/compound-mini` → `allam-2-7b`) with smart Indic city extraction (`kolkata ma`, `mumbai me`, `delhi nu`) and 0ms deterministic telemetry fallback for zero downtime.
 - **14 Specialized Telemetry Tools**: Dynamic tool execution covering current weather, 7-day forecast, 24-48h hourly trends, US AQI pollutants, solar UV radiation, barometric pressure, soil moisture/agromet telemetry, and geocoding.
 - **Multi-Source Ensemble Engine**: Parallel data ingestion across up to 5 weather providers with weighted algorithm calculation. Open-Meteo (ECMWF/IMD standard NWP model) is assigned **Priority-1 trust weighting (3.0×)**.
 - **Agricultural Farmer Advisory Mode**: Crop-specific advisories for 8 major crop types with irrigation, pesticide spraying, thermal/frost stress, and harvest window guidance.
@@ -224,7 +224,7 @@ weathergpt/
 | Key | Mandatory | Description |
 | :--- | :--- | :--- |
 | `GROQ_API_KEY` | ✅ | Groq API key for LPU high-speed LLM inference |
-| `GROQ_MODEL` | Optional | Primary model override (default: `qwen/qwen3.8-27b`) |
+| `GROQ_MODEL` | Optional | Primary model override (default: `openai/gpt-oss-120b`) |
 | `WEATHERAPI_KEY` | Optional | WeatherAPI key for backend tool-level fusion |
 | `OPENWEATHER_KEY` | Optional | OpenWeatherMap key for backend tool-level fusion |
 
