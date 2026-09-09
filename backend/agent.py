@@ -41,15 +41,23 @@ class AgentState(TypedDict):
     messages: Annotated[Sequence[BaseMessage], operator.add]
 
 
-GROQ_MODEL = os.getenv("GROQ_MODEL", "qwen/qwen3.8-27b")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
-# Configure primary LLM and multi-provider/multi-model fallbacks for 0% downtime
+# Configure primary LLM and tool-calling model fallbacks for 0% downtime across all Groq models
 primary_llm = ChatGroq(model=GROQ_MODEL, temperature=0, max_retries=2).bind_tools(TOOLS)
-fallback_1 = ChatGroq(model="groq/compound", temperature=0, max_retries=2).bind_tools(TOOLS)
+fallback_1 = ChatGroq(model="qwen/qwen3.8-27b", temperature=0, max_retries=2).bind_tools(TOOLS)
 fallback_2 = ChatGroq(model="qwen/qwen3.6-27b", temperature=0, max_retries=2).bind_tools(TOOLS)
-fallback_3 = ChatGroq(model="groq/compound-mini", temperature=0, max_retries=2).bind_tools(TOOLS)
+fallback_3 = ChatGroq(model="openai/gpt-oss-20b", temperature=0, max_retries=2).bind_tools(TOOLS)
+fallback_4 = ChatGroq(model="openai/gpt-oss-safeguard-20b", temperature=0, max_retries=2).bind_tools(TOOLS)
 
-llm = primary_llm.with_fallbacks([fallback_1, fallback_2, fallback_3])
+llm = primary_llm.with_fallbacks([fallback_1, fallback_2, fallback_3, fallback_4])
+
+# Emergency non-tool text generation LLMs (for formatting/translating if tool-calling LLMs hit rate limits)
+text_fallback_1 = ChatGroq(model="groq/compound", temperature=0, max_retries=1)
+text_fallback_2 = ChatGroq(model="groq/compound-mini", temperature=0, max_retries=1)
+text_fallback_3 = ChatGroq(model="allam-2-7b", temperature=0, max_retries=1)
+
+text_llm_chain = text_fallback_1.with_fallbacks([text_fallback_2, text_fallback_3])
 
 
 def agent_node(state: AgentState):
@@ -77,36 +85,71 @@ def _build_graph():
 
 _app = _build_graph()
 
+COMMON_STOP_WORDS = {
+    "hello", "hi", "hey", "namaste", "kemcho", "kem", "cho", "suprabhat", "thanks", "thankyou",
+    "good", "morning", "evening", "night", "just", "please", "can", "you", "me", "us", "my",
+    "your", "with", "have", "has", "had", "do", "does", "did", "ane", "and", "su", "che", "kya",
+    "hai", "kaisa", "kevu", "batao", "weather", "temperature", "temp", "forecast", "climate",
+    "telemetry", "report", "condition", "sky", "live", "in", "of", "at", "for", "the", "tell",
+    "about", "how", "is", "what", "like", "today", "tomorrow", "now", "current", "city", "ma",
+    "me", "nu", "na", "ka", "ki", "ke", "par", "se", "it", "raining", "right", "show", "will",
+    "there", "be", "any", "rain", "sun", "cloud", "wind"
+}
+
+
+def smart_extract_city(query: str, default_location: str = "New Delhi") -> str:
+    """Smartly extracts target city from query handling Indic postpositions (ma, me, nu, ka) & English prepositions."""
+    if not query or not query.strip():
+        return default_location.split(",")[0].strip() if default_location else "New Delhi"
+
+    q_clean = query.lower().strip()
+
+    # 1. English prepositions: 'in/of/at/for/near/around <city>'
+    m_eng = re.search(r'\b(?:in|of|at|for|near|around)\s+([a-z\s]+)', q_clean)
+    if m_eng:
+        raw = m_eng.group(1).strip()
+        raw = re.sub(r'\b(today|tomorrow|now|right|current|weather|temp|temperature|mausam|report|info)\b.*', '', raw).strip()
+        words = [w for w in raw.split() if w not in COMMON_STOP_WORDS]
+        if words:
+            candidate = " ".join(words)
+            res = geocode_city.invoke(candidate)
+            if isinstance(res, dict) and res.get("latitude") and not res.get("error"):
+                return res.get("city", candidate.title())
+
+    # 2. Indic postpositions: '<city> ma/me/nu/na/ka/ki/ke/par/se' (e.g. 'kolkata ma', 'mumbai me', 'delhi nu')
+    m_ind = re.search(r'\b([a-z\s]+?)\s+(?:ma|me|nu|na|ka|ki|ke|par|se)\b', q_clean)
+    if m_ind:
+        words = m_ind.group(1).strip().split()
+        filtered = [w for w in words if w not in COMMON_STOP_WORDS]
+        if filtered:
+            candidate = " ".join(filtered)
+            res = geocode_city.invoke(candidate)
+            if isinstance(res, dict) and res.get("latitude") and not res.get("error"):
+                return res.get("city", candidate.title())
+
+    # 3. Direct city search on non-stopword tokens
+    tokens = [w.strip("?,.!") for w in q_clean.split() if w.strip("?,.!") not in COMMON_STOP_WORDS]
+    for token in tokens:
+        if len(token) >= 3:
+            res = geocode_city.invoke(token)
+            if isinstance(res, dict) and res.get("latitude") and not res.get("error"):
+                return res.get("city", token.title())
+
+    # 4. Fallback to default user location
+    return default_location.split(",")[0].strip() if default_location else "New Delhi"
+
 
 def run_deterministic_telemetry_fallback(location_str: str = "New Delhi", query: str = "", language: str = "English") -> str:
     """Zero-error deterministic synthesizer: Fetches live weather directly if all LLMs fail or hit rate limits."""
     try:
-        import re
-        target_city = ""
-        geo = None
-
-        if query and query.strip():
-            # Try extracting city name from query (e.g. "weather in rajkot", "rajkot weather", "temperature of mumbai")
-            match = re.search(r'(?:in|of|at|for)\s+([A-Za-z\s]+)', query, re.IGNORECASE)
-            candidate = match.group(1).strip() if match else ""
-            if not candidate:
-                candidate = re.sub(r'(?i)\b(weather|temperature|temp|forecast|climate|telemetry|report|condition|sky|live|in|of|at|for|the|tell|me|about|how|is|what|like|today|tomorrow|now|current|city)\b', '', query).strip()
-
-            if candidate and len(candidate) >= 2:
-                geo_attempt = geocode_city.invoke(candidate)
-                if isinstance(geo_attempt, dict) and geo_attempt.get("latitude") and not geo_attempt.get("error"):
-                    geo = geo_attempt
-                    target_city = geo_attempt.get("city", candidate)
-
-        if not target_city:
-            city_name = location_str.split(",")[0].strip() if location_str and "Farmer" not in location_str else "New Delhi"
-            geo = geocode_city.invoke(city_name)
-        else:
-            city_name = target_city
+        target_city = smart_extract_city(query, location_str)
+        geo = geocode_city.invoke(target_city)
 
         if isinstance(geo, dict) and (geo.get("error") or not geo.get("latitude")):
             geo = geocode_city.invoke("New Delhi")
             city_name = "New Delhi"
+        else:
+            city_name = geo.get("city", target_city)
 
         lat = geo.get("latitude", 28.6139)
         lon = geo.get("longitude", 77.209)
@@ -144,7 +187,27 @@ def run_deterministic_telemetry_fallback(location_str: str = "New Delhi", query:
             "days": days_list if days_list else [{"day": "Today", "temp": temp, "condition": cond, "rainProb": 10}]
         })
 
-        return f"""## 🌤️ Weather Live Telemetry for **{city_name}**
+        # Try non-tool LLMs (groq/compound, groq/compound-mini, allam-2-7b) to generate native language text response
+        try:
+            prompt = f"""Format a weather response for user query '{query}' for city {city_name} in target language '{language}'.
+Weather Data: Temp {temp}°C, Feels like {feels}°C, Condition: {cond}, Humidity: {humidity}%, Wind: {wind} km/h.
+Provide clean Markdown in {language} script followed by these EXACT widget code blocks at the end:
+
+```widget:weather
+{weather_widget_json}
+```
+
+```widget:forecast
+{forecast_widget_json}
+```"""
+            formatted_res = text_llm_chain.invoke(prompt)
+            if formatted_res and formatted_res.content and len(formatted_res.content) > 30:
+                return formatted_res.content
+        except Exception as text_err:
+            print(f"[Fallback Warning] Non-tool LLM text chain exception: {text_err}")
+
+        # Direct localized fallback output if non-tool LLMs are unreachable
+        return f"""## 🌤️ Weather Telemetry for **{city_name}** ({language})
 
 * **Temperature**: **{temp}°C** (Feels like **{feels}°C**)
 * **Condition**: **{cond}**
@@ -160,8 +223,10 @@ def run_deterministic_telemetry_fallback(location_str: str = "New Delhi", query:
 ```
 
 *Live telemetry gathered directly from multi-source weather satellites.*"""
-    except Exception:
+    except Exception as e:
+        print(f"[Fallback Critical Error] {e}")
         return "## 🌤️ WeatherGPT Live Status\n\nWeatherGPT live service is online. How can I help you with weather forecast, rain alerts, or farming advisories today?"
+
 
 
 def run_weather_agent(
