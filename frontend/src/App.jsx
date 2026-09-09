@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Menu, Sun } from 'lucide-react'
+import { Menu } from 'lucide-react'
 import Sidebar from './components/Sidebar'
 import LocationPickerModal from './components/LocationPickerModal'
 import LanguagePickerModal, { INDIAN_LANGUAGES } from './components/LanguagePickerModal'
@@ -167,12 +167,9 @@ export default function App() {
             <Menu className="w-5 h-5" />
           </button>
           <div
-            className="flex items-center gap-2 cursor-pointer"
+            className="flex items-center cursor-pointer"
             onClick={() => setActiveView('home')}
           >
-            <div className="w-5 h-5 rounded-sm bg-accent/20 border border-accent/30 flex items-center justify-center">
-              <Sun size={12} className="text-accent" />
-            </div>
             <span className="font-bricolage text-lg font-bold tracking-tight text-white/95">
               WeatherGPT
             </span>

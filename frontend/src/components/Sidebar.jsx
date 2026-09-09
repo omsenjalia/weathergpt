@@ -1,4 +1,4 @@
-import { Sun, MapPin, Languages, Plus, X } from 'lucide-react'
+import { MapPin, Languages, Plus, X } from 'lucide-react'
 import { Translations } from '../utils/translations'
 
 export default function Sidebar({
@@ -25,15 +25,12 @@ export default function Sidebar({
         <div className="flex flex-col gap-3">
           <div className="flex items-center justify-between">
             <div
-              className="flex items-center gap-2 cursor-pointer"
+              className="flex items-center cursor-pointer"
               onClick={() => {
                 onNavigate('home')
                 onCloseSidebar?.()
               }}
             >
-              <div className="w-5.5 h-5.5 rounded-sm bg-accent/20 border border-accent/30 flex items-center justify-center">
-                <Sun size={14} className="text-accent" />
-              </div>
               <span className="font-bricolage text-xl font-bold tracking-tight text-white/95">
                 WeatherGPT
               </span>

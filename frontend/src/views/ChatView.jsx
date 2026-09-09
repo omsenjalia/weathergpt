@@ -326,10 +326,7 @@ export default function ChatView({ messages, setMessages, initialMessage = '', o
               <AnimatedContent key={i} delay={0} direction="up">
                 <div className={`flex flex-col ${msg.isUser ? 'items-end' : 'items-start'}`}>
                   {!msg.isUser && (
-                    <div className="flex items-center gap-1.5 text-accent text-xs font-semibold mb-1.5 ml-1">
-                      <div className="w-5 h-5 rounded-md bg-accent/20 flex items-center justify-center">
-                        <Sun size={12} className="text-accent" />
-                      </div>
+                    <div className="flex items-center text-accent text-xs font-semibold mb-1.5 ml-1">
                       <span>WeatherGPT</span>
                     </div>
                   )}
@@ -348,10 +345,7 @@ export default function ChatView({ messages, setMessages, initialMessage = '', o
 
             {loading && (
               <div className="flex flex-col items-start">
-                <div className="flex items-center gap-1.5 text-accent text-xs font-semibold mb-1.5 ml-1">
-                  <div className="w-5 h-5 rounded-md bg-accent/20 flex items-center justify-center">
-                    <Sun size={12} className="text-accent" />
-                  </div>
+                <div className="flex items-center text-accent text-xs font-semibold mb-1.5 ml-1">
                   <span>{Translations.get(langCode, 'botThinking')}</span>
                 </div>
                 <div className="glass rounded-3xl rounded-bl-md px-5 py-3.5 flex gap-1.5 items-center">
