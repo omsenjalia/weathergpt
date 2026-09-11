@@ -1,4 +1,5 @@
 import os
+import concurrent.futures
 import sys
 import time
 import platform
@@ -88,18 +89,71 @@ class ChatResponse(BaseModel):
     response: str
 
 
+def _run_chat_sync(request: "ChatRequest") -> str:
+    """Run agent with a hard timeout so Vercel/mobile clients do not hang."""
+    from agent import run_deterministic_telemetry_fallback
+
+    payload = request.messages if request.messages else request.message
+    last_msg = ""
+    if isinstance(payload, str):
+        last_msg = payload
+    elif isinstance(payload, list):
+        for m in reversed(payload):
+            if isinstance(m, dict) and m.get("role") == "user":
+                last_msg = str(m.get("content") or "")
+                break
+
+    language = (request.language or "English").strip() or "English"
+    location = (request.location or "New Delhi").strip() or "New Delhi"
+
+    # Prefer deterministic path under time pressure — full LangGraph often exceeds
+    # serverless limits and leaves the mobile app with a generic network error.
+    use_fast = os.getenv("CHAT_FAST_PATH", "1") != "0"
+
+    def _agent():
+        return run_weather_agent(
+            payload,
+            request.location,
+            request.language,
+            request.farmer_mode,
+            request.crop,
+        )
+
+    timeout_s = float(os.getenv("CHAT_TIMEOUT_SECONDS", "22"))
+
+    if use_fast:
+        # Fast telemetry answer first (works offline from LLM rate limits)
+        try:
+            fast = run_deterministic_telemetry_fallback(location, last_msg, language)
+            if fast and len(fast) > 40:
+                # Still try agent briefly for richer answer when time allows
+                try:
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                        fut = pool.submit(_agent)
+                        rich = fut.result(timeout=timeout_s)
+                        if rich and len(rich) > 20:
+                            return rich
+                except Exception as agent_err:
+                    print(f"[chat] agent skipped/failed: {agent_err}")
+                return fast
+        except Exception as fast_err:
+            print(f"[chat] fast path failed: {fast_err}")
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            fut = pool.submit(_agent)
+            return fut.result(timeout=timeout_s)
+    except concurrent.futures.TimeoutError:
+        print("[chat] agent timeout — deterministic fallback")
+        return run_deterministic_telemetry_fallback(location, last_msg, language)
+    except Exception as exc:
+        print(f"[chat] agent error: {exc}")
+        return run_deterministic_telemetry_fallback(location, last_msg, language)
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    # Pass messages list if provided, otherwise fallback to message string
-    payload = request.messages if request.messages else request.message
-    response = await run_in_threadpool(
-        run_weather_agent,
-        payload,
-        request.location,
-        request.language,
-        request.farmer_mode,
-        request.crop,
-    )
+    response = await run_in_threadpool(_run_chat_sync, request)
     return ChatResponse(response=response)
 
 
