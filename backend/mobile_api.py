@@ -76,13 +76,16 @@ async def get_weather(
             "longitude": lon,
             "current": (
                 "temperature_2m,apparent_temperature,relative_humidity_2m,"
-                "weather_code,wind_speed_10m,surface_pressure,precipitation"
+                "weather_code,wind_speed_10m,wind_direction_10m,"
+                "surface_pressure,precipitation"
             ),
+            "hourly": "temperature_2m,precipitation_probability,weather_code",
             "daily": (
                 "temperature_2m_max,temperature_2m_min,"
-                "precipitation_probability_max,weather_code,rain_sum"
+                "precipitation_probability_max,weather_code,rain_sum,"
+                "sunrise,sunset,uv_index_max,wind_direction_10m_dominant"
             ),
-            "forecast_days": 4,
+            "forecast_days": 7,
             "timezone": "auto",
         },
     )
@@ -112,6 +115,44 @@ async def get_weather(
             }
         )
 
+    hourly = data.get("hourly") or {}
+    h_times = hourly.get("time") or []
+    h_temps = hourly.get("temperature_2m") or []
+    h_pop = hourly.get("precipitation_probability") or []
+    # next 24 hourly points from "now" if possible
+    hourly_out = []
+    for i in range(min(24, len(h_times))):
+        hourly_out.append({
+            "time": h_times[i],
+            "temperature_c": h_temps[i] if i < len(h_temps) else None,
+            "rain_probability": h_pop[i] if i < len(h_pop) else None,
+        })
+
+    sunrises = daily.get("sunrise") or []
+    sunsets = daily.get("sunset") or []
+    uv_max = daily.get("uv_index_max") or []
+    wind_dir = current.get("wind_direction_10m")
+
+    # Air quality (best-effort)
+    aqi = None
+    pm25 = None
+    try:
+        aq = _get_json(
+            "https://air-quality-api.open-meteo.com/v1/air-quality",
+            {
+                "latitude": lat,
+                "longitude": lon,
+                "current": "european_aqi,pm2_5",
+                "timezone": "auto",
+            },
+            timeout=8.0,
+        )
+        cur_aq = aq.get("current") or {}
+        aqi = cur_aq.get("european_aqi")
+        pm25 = cur_aq.get("pm2_5")
+    except Exception:
+        pass
+
     return {
         "lat": lat,
         "lon": lon,
@@ -124,9 +165,16 @@ async def get_weather(
         "low_c": lows[0] if lows else current.get("temperature_2m"),
         "rain_probability": rain_probs[0] if rain_probs else 0,
         "wind_kmh": current.get("wind_speed_10m"),
+        "wind_direction": wind_dir,
         "humidity": current.get("relative_humidity_2m"),
         "pressure_hpa": current.get("surface_pressure"),
         "precipitation_mm": current.get("precipitation"),
+        "uv_index": uv_max[0] if uv_max else None,
+        "sunrise": sunrises[0] if sunrises else None,
+        "sunset": sunsets[0] if sunsets else None,
+        "aqi": aqi,
+        "pm2_5": pm25,
+        "hourly": hourly_out,
         "timezone": data.get("timezone"),
         "forecast": forecast,
         "source": "open-meteo",
