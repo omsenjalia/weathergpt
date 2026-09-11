@@ -19,6 +19,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from agent import run_weather_agent, GROQ_MODEL, TOOLS
+from mobile_api import router as mobile_router
 
 START_TIME = time.time()
 START_DATETIME = datetime.now().isoformat()
@@ -44,6 +45,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(mobile_router)
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
