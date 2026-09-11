@@ -75,3 +75,40 @@ def test_non_weather_guardrail():
     assert "response" in data
     assert "weather" in data["response"].lower() or "sorry" in data["response"].lower()
 
+
+
+def test_weather_requires_coords():
+    """GET /weather without lat/lon should fail validation."""
+    response = client.get("/weather")
+    assert response.status_code == 422
+
+
+def test_weather_endpoint_schema():
+    """GET /weather returns fields expected by the Flutter home screens."""
+    response = client.get("/weather", params={"lat": 23.0225, "lon": 72.5714})
+    # Upstream Open-Meteo must be reachable in CI; allow 200 or upstream error codes
+    assert response.status_code in (200, 502, 504)
+    if response.status_code == 200:
+        data = response.json()
+        for key in (
+            "temperature_c",
+            "condition",
+            "high_c",
+            "low_c",
+            "rain_probability",
+            "wind_kmh",
+            "humidity",
+            "pressure_hpa",
+        ):
+            assert key in data, f"missing {key}"
+
+
+def test_advisory_endpoint_shape():
+    response = client.get(
+        "/advisory", params={"lat": 23.02, "lon": 72.57, "crop": "wheat", "days": 3}
+    )
+    assert response.status_code in (200, 502, 504)
+    if response.status_code == 200:
+        data = response.json()
+        assert "windows" in data
+        assert "summary" in data
