@@ -240,7 +240,11 @@ Provide clean Markdown in {language} script followed by these EXACT widget code 
 *Live telemetry gathered directly from multi-source weather satellites.*"""
     except Exception as e:
         print(f"[Fallback Critical Error] {e}")
-        return "## 🌤️ WeatherGPT Live Status\n\nWeatherGPT live service is online. How can I help you with weather forecast, rain alerts, or farming advisories today?"
+        return (
+            "I couldn't fetch live weather for that request just now. "
+            "Please try again with a city name, for example: "
+            "**What's the weather in Ahmedabad?**"
+        )
 
 
 

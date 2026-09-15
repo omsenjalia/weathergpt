@@ -89,12 +89,31 @@ class ChatResponse(BaseModel):
     response: str
 
 
+def _is_greeting_or_meta(text: str) -> bool:
+    q = (text or "").strip().lower()
+    if not q:
+        return True
+    greetings = (
+        "hi", "hello", "hey", "yo", "sup", "namaste", "namaskar",
+        "good morning", "good evening", "good night", "thanks", "thank you",
+        "what do you do", "who are you", "help", "what can you do",
+        "how are you", "ok", "okay", "yes", "no",
+    )
+    if q in greetings:
+        return True
+    if any(q.startswith(g + " ") or q.startswith(g + "?") or q.startswith(g + "!") for g in greetings):
+        return True
+    return False
+
+
 def _is_simple_weather_query(text: str, farmer_mode: bool) -> bool:
     """Heuristic: current conditions / short forecast → deterministic path only."""
     if farmer_mode:
         return False
-    q = (text or "").lower()
-    if len(q) > 220:
+    q = (text or "").lower().strip()
+    if not q or len(q) > 220:
+        return False
+    if _is_greeting_or_meta(q):
         return False
     complex_markers = (
         "compare", "historical", "anomaly", "trend", "why", "explain",
@@ -106,13 +125,14 @@ def _is_simple_weather_query(text: str, farmer_mode: bool) -> bool:
     simple_markers = (
         "weather", "temperature", "temp", "forecast", "rain", "humidity",
         "wind", "aqi", "uv", "hot", "cold", "mausam", "baarish", "hawa",
-        "degree", "celsius", "condition", "climate",
+        "degree", "celsius", "condition", "climate", "storm", "thunder",
+        "heat", "cool", "cloudy", "sunny", "monsoon",
     )
-    # Location-only or weather-ish queries
     if any(m in q for m in simple_markers):
         return True
-    # Short queries are usually place names ("Vallabh Vidyanagar")
-    return len(q.split()) <= 6
+    # Multi-word place-like queries only (avoid "hi" / "help")
+    tokens = [t for t in q.replace("?", " ").split() if t]
+    return len(tokens) >= 2 and len(tokens) <= 5 and all(t.isalpha() for t in tokens)
 
 
 def _run_chat_sync(request: "ChatRequest") -> str:
@@ -141,6 +161,14 @@ def _run_chat_sync(request: "ChatRequest") -> str:
             request.language,
             request.farmer_mode,
             request.crop,
+        )
+
+    # Greetings / meta: short helpful reply without weather telemetry or agent.
+    if _is_greeting_or_meta(last_msg):
+        return (
+            "I'm **WeatherGPT** — I help with live weather, forecasts, rain alerts, "
+            "air quality, and farming advisories.\n\n"
+            "Try asking: *Will it rain tomorrow in Ahmedabad?* or *What's the temperature in Delhi?*"
         )
 
     # Simple weather / place queries: deterministic only (no agent wait).
