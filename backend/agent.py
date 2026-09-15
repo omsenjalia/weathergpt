@@ -127,13 +127,18 @@ def smart_extract_city(query: str, default_location: str = "New Delhi") -> str:
             if isinstance(res, dict) and res.get("latitude") and not res.get("error"):
                 return res.get("city", candidate.title())
 
-    # 3. Direct city search on non-stopword tokens
+    # 3. Prefer multi-word place names (e.g. "vallabh vidyanagar"), then single tokens
     tokens = [w.strip("?,.!") for w in q_clean.split() if w.strip("?,.!") not in COMMON_STOP_WORDS]
-    for token in tokens:
-        if len(token) >= 3:
-            res = geocode_city.invoke(token)
-            if isinstance(res, dict) and res.get("latitude") and not res.get("error"):
-                return res.get("city", token.title())
+    if tokens:
+        # Longest phrase first
+        for length in range(len(tokens), 0, -1):
+            for i in range(0, len(tokens) - length + 1):
+                phrase = " ".join(tokens[i:i + length])
+                if len(phrase) < 3:
+                    continue
+                res = geocode_city.invoke(phrase)
+                if isinstance(res, dict) and res.get("latitude") and not res.get("error"):
+                    return res.get("city", phrase.title())
 
     # 4. Fallback to default user location
     return default_location.split(",")[0].strip() if default_location else "New Delhi"
@@ -156,11 +161,21 @@ def run_deterministic_telemetry_fallback(location_str: str = "New Delhi", query:
         curr = get_current_weather.invoke({"latitude": lat, "longitude": lon})
         fore = get_weather_forecast.invoke({"latitude": lat, "longitude": lon, "days": 3})
 
-        temp = curr.get("temperature_2m", 27) if isinstance(curr, dict) else 27
-        feels = curr.get("apparent_temperature", temp) if isinstance(curr, dict) else temp
-        cond = curr.get("condition", "Partly Cloudy") if isinstance(curr, dict) else "Clear Sky"
-        humidity = curr.get("relative_humidity_2m", 65) if isinstance(curr, dict) else 65
-        wind = curr.get("wind_speed_10m", 12) if isinstance(curr, dict) else 12
+        if not isinstance(curr, dict):
+            curr = {}
+        # Fused tool payload uses temperature_2m / apparent_temperature; tolerate aliases
+        temp = curr.get("temperature_2m", curr.get("temp", curr.get("temperature", 27)))
+        feels = curr.get("apparent_temperature", curr.get("feelsLike", curr.get("feels_like", temp)))
+        cond = curr.get("condition", curr.get("weather", "Partly Cloudy"))
+        humidity = curr.get("relative_humidity_2m", curr.get("humidity", 65))
+        wind = curr.get("wind_speed_10m", curr.get("windSpeed", curr.get("wind_kmh", 12)))
+        try:
+            temp = round(float(temp), 1)
+            feels = round(float(feels), 1)
+            humidity = int(float(humidity))
+            wind = round(float(wind), 1)
+        except (TypeError, ValueError):
+            temp, feels, humidity, wind = 27, 27, 65, 12
 
         days_list = []
         if isinstance(fore, dict) and "forecast" in fore:
