@@ -83,6 +83,8 @@ class ChatRequest(BaseModel):
     language: str = "English"
     farmer_mode: bool = False
     crop: str = ""
+    lat: float | None = None
+    lon: float | None = None
 
 
 class ChatResponse(BaseModel):
@@ -174,7 +176,9 @@ def _run_chat_sync(request: "ChatRequest") -> str:
     # Simple weather / place queries: deterministic only (no agent wait).
     if force_fast and _is_simple_weather_query(last_msg, bool(request.farmer_mode)):
         try:
-            return run_deterministic_telemetry_fallback(location, last_msg, language)
+            return run_deterministic_telemetry_fallback(
+                location, last_msg, language, lat=request.lat, lon=request.lon
+            )
         except Exception as fast_err:
             print(f"[chat] fast path failed: {fast_err}")
 
@@ -184,10 +188,14 @@ def _run_chat_sync(request: "ChatRequest") -> str:
             return fut.result(timeout=timeout_s)
     except concurrent.futures.TimeoutError:
         print("[chat] agent timeout — deterministic fallback")
-        return run_deterministic_telemetry_fallback(location, last_msg, language)
+        return run_deterministic_telemetry_fallback(
+            location, last_msg, language, lat=request.lat, lon=request.lon
+        )
     except Exception as exc:
         print(f"[chat] agent error: {exc}")
-        return run_deterministic_telemetry_fallback(location, last_msg, language)
+        return run_deterministic_telemetry_fallback(
+            location, last_msg, language, lat=request.lat, lon=request.lon
+        )
 
 
 @app.post("/chat", response_model=ChatResponse)

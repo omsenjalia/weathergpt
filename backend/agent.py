@@ -144,20 +144,41 @@ def smart_extract_city(query: str, default_location: str = "New Delhi") -> str:
     return default_location.split(",")[0].strip() if default_location else "New Delhi"
 
 
-def run_deterministic_telemetry_fallback(location_str: str = "New Delhi", query: str = "", language: str = "English") -> str:
+def run_deterministic_telemetry_fallback(
+    location_str: str = "New Delhi",
+    query: str = "",
+    language: str = "English",
+    lat: float | None = None,
+    lon: float | None = None,
+) -> str:
     """Zero-error deterministic synthesizer: Fetches live weather directly if all LLMs fail or hit rate limits."""
     try:
-        target_city = smart_extract_city(query, location_str)
-        geo = geocode_city.invoke(target_city)
-
-        if isinstance(geo, dict) and (geo.get("error") or not geo.get("latitude")):
-            geo = geocode_city.invoke("New Delhi")
-            city_name = "New Delhi"
+        target_city = smart_extract_city(query, location_str) or (location_str or "New Delhi")
+        city_name = target_city
+        if lat is not None and lon is not None:
+            # Mobile clients send coordinates — skip fragile geocode when possible.
+            pass
         else:
-            city_name = geo.get("city", target_city)
+            geo = geocode_city.invoke(target_city)
+            if isinstance(geo, dict) and (geo.get("error") or not geo.get("latitude")):
+                # Try location_str as-is, then Ahmedabad/Delhi hard fallbacks
+                for candidate in (location_str, "Ahmedabad", "New Delhi"):
+                    if not candidate:
+                        continue
+                    geo = geocode_city.invoke(candidate.split(",")[0].strip())
+                    if isinstance(geo, dict) and geo.get("latitude") and not geo.get("error"):
+                        break
+            if isinstance(geo, dict) and geo.get("latitude") and not geo.get("error"):
+                lat = float(geo["latitude"])
+                lon = float(geo["longitude"])
+                city_name = geo.get("city", target_city)
+            else:
+                # Last-resort coordinates (Ahmedabad) so we never empty-fail
+                lat, lon = 23.0225, 72.5714
+                city_name = target_city or "Ahmedabad"
 
-        lat = geo.get("latitude", 28.6139)
-        lon = geo.get("longitude", 77.209)
+        if lat is None or lon is None:
+            lat, lon = 23.0225, 72.5714
         curr = get_current_weather.invoke({"latitude": lat, "longitude": lon})
         fore = get_weather_forecast.invoke({"latitude": lat, "longitude": lon, "days": 3})
 
