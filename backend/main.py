@@ -98,6 +98,8 @@ def _is_greeting_or_meta(text: str) -> bool:
         "good morning", "good evening", "good night", "thanks", "thank you",
         "what do you do", "who are you", "help", "what can you do",
         "how are you", "ok", "okay", "yes", "no",
+        # Indic scripts
+        "હેલો", "હાય", "નમસ્તે", "नमस्ते", "हैलो", "हाय", "வணக்கம்",
     )
     if q in greetings:
         return True
