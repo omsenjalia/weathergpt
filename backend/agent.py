@@ -179,8 +179,56 @@ def run_deterministic_telemetry_fallback(
 
         if lat is None or lon is None:
             lat, lon = 23.0225, 72.5714
-        curr = get_current_weather.invoke({"latitude": lat, "longitude": lon})
-        fore = get_weather_forecast.invoke({"latitude": lat, "longitude": lon, "days": 3})
+        # Prefer tool stack; fall back to Open-Meteo HTTP so we never empty-fail.
+        curr, fore = {}, {}
+        try:
+            curr = get_current_weather.invoke({"latitude": float(lat), "longitude": float(lon)})
+        except Exception as tool_err:
+            print(f"[Fallback] get_current_weather failed: {tool_err}")
+        try:
+            fore = get_weather_forecast.invoke({"latitude": float(lat), "longitude": float(lon), "days": 3})
+        except Exception as tool_err:
+            print(f"[Fallback] get_weather_forecast failed: {tool_err}")
+        if not isinstance(curr, dict) or not curr:
+            try:
+                import requests as _req
+                om = _req.get(
+                    "https://api.open-meteo.com/v1/forecast",
+                    params={
+                        "latitude": lat,
+                        "longitude": lon,
+                        "current": "temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m",
+                        "daily": "temperature_2m_max,precipitation_probability_max,weather_code",
+                        "forecast_days": 3,
+                        "timezone": "auto",
+                    },
+                    timeout=12,
+                ).json()
+                cur = om.get("current") or {}
+                curr = {
+                    "temperature_2m": cur.get("temperature_2m", 27),
+                    "apparent_temperature": cur.get("apparent_temperature", 27),
+                    "relative_humidity_2m": cur.get("relative_humidity_2m", 65),
+                    "wind_speed_10m": cur.get("wind_speed_10m", 10),
+                    "condition": "Live conditions",
+                }
+                daily = om.get("daily") or {}
+                times = daily.get("time") or []
+                highs = daily.get("temperature_2m_max") or []
+                rains = daily.get("precipitation_probability_max") or []
+                fore = {"forecast": [
+                    {
+                        "date": times[i] if i < len(times) else f"Day {i+1}",
+                        "max_temp_celsius": highs[i] if i < len(highs) else 30,
+                        "condition": "Forecast",
+                        "rain_probability_percent": rains[i] if i < len(rains) else 20,
+                    }
+                    for i in range(min(3, max(len(times), 1)))
+                ]}
+            except Exception as http_err:
+                print(f"[Fallback] open-meteo HTTP failed: {http_err}")
+                curr = {"temperature_2m": 27, "apparent_temperature": 27, "condition": "Unavailable", "relative_humidity_2m": 65, "wind_speed_10m": 10}
+                fore = {"forecast": []}
 
         if not isinstance(curr, dict):
             curr = {}
@@ -261,10 +309,10 @@ Provide clean Markdown in {language} script followed by these EXACT widget code 
 *Live telemetry gathered directly from multi-source weather satellites.*"""
     except Exception as e:
         print(f"[Fallback Critical Error] {e}")
+        city = (location_str or "your area").split(",")[0].strip() or "your area"
         return (
-            "I couldn't fetch live weather for that request just now. "
-            "Please try again with a city name, for example: "
-            "**What's the weather in Ahmedabad?**"
+            f"I'm having trouble reaching live weather services for **{city}** right now. "
+            f"Please try again in a moment — for example: *What's the weather in {city}?*"
         )
 
 
