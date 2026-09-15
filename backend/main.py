@@ -89,8 +89,34 @@ class ChatResponse(BaseModel):
     response: str
 
 
+def _is_simple_weather_query(text: str, farmer_mode: bool) -> bool:
+    """Heuristic: current conditions / short forecast → deterministic path only."""
+    if farmer_mode:
+        return False
+    q = (text or "").lower()
+    if len(q) > 220:
+        return False
+    complex_markers = (
+        "compare", "historical", "anomaly", "trend", "why", "explain",
+        "irrigat", "pesticide", "spray", "harvest", "sow", "crop advice",
+        "multi-day plan", "week ahead detailed",
+    )
+    if any(m in q for m in complex_markers):
+        return False
+    simple_markers = (
+        "weather", "temperature", "temp", "forecast", "rain", "humidity",
+        "wind", "aqi", "uv", "hot", "cold", "mausam", "baarish", "hawa",
+        "degree", "celsius", "condition", "climate",
+    )
+    # Location-only or weather-ish queries
+    if any(m in q for m in simple_markers):
+        return True
+    # Short queries are usually place names ("Vallabh Vidyanagar")
+    return len(q.split()) <= 6
+
+
 def _run_chat_sync(request: "ChatRequest") -> str:
-    """Run agent with a hard timeout so Vercel/mobile clients do not hang."""
+    """Route simple weather to fast path; complex to timed agent + fallback."""
     from agent import run_deterministic_telemetry_fallback
 
     payload = request.messages if request.messages else request.message
@@ -105,10 +131,8 @@ def _run_chat_sync(request: "ChatRequest") -> str:
 
     language = (request.language or "English").strip() or "English"
     location = (request.location or "New Delhi").strip() or "New Delhi"
-
-    # Prefer deterministic path under time pressure — full LangGraph often exceeds
-    # serverless limits and leaves the mobile app with a generic network error.
-    use_fast = os.getenv("CHAT_FAST_PATH", "1") != "0"
+    timeout_s = float(os.getenv("CHAT_TIMEOUT_SECONDS", "22"))
+    force_fast = os.getenv("CHAT_FAST_PATH", "1") != "0"
 
     def _agent():
         return run_weather_agent(
@@ -119,23 +143,10 @@ def _run_chat_sync(request: "ChatRequest") -> str:
             request.crop,
         )
 
-    timeout_s = float(os.getenv("CHAT_TIMEOUT_SECONDS", "22"))
-
-    if use_fast:
-        # Fast telemetry answer first (works offline from LLM rate limits)
+    # Simple weather / place queries: deterministic only (no agent wait).
+    if force_fast and _is_simple_weather_query(last_msg, bool(request.farmer_mode)):
         try:
-            fast = run_deterministic_telemetry_fallback(location, last_msg, language)
-            if fast and len(fast) > 40:
-                # Still try agent briefly for richer answer when time allows
-                try:
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                        fut = pool.submit(_agent)
-                        rich = fut.result(timeout=timeout_s)
-                        if rich and len(rich) > 20:
-                            return rich
-                except Exception as agent_err:
-                    print(f"[chat] agent skipped/failed: {agent_err}")
-                return fast
+            return run_deterministic_telemetry_fallback(location, last_msg, language)
         except Exception as fast_err:
             print(f"[chat] fast path failed: {fast_err}")
 
