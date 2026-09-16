@@ -135,3 +135,16 @@ pytest
 ## 📄 License
 
 MIT License — see [LICENSE](LICENSE) for details.
+
+## Dual clients (web + mobile)
+
+One backend deployment serves both:
+
+| Client | Repo | Primary endpoints |
+|--------|------|-------------------|
+| Web | `weathergpt` | `POST /chat`, `GET /dev`, `POST /dev/sandbox` |
+| Mobile | `weathergpt-app` | `GET /weather`, `POST /chat`, `/advisory`, `/historical`, `/comparison` |
+
+Point both apps at the same `BACKEND_URL` / `VITE_API_URL` (e.g. `https://weathergpt-backend.vercel.app`).
+
+`POST /chat` accepts web message history **or** a mobile single `message`, plus optional `lat`/`lon` from the app.
