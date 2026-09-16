@@ -37,7 +37,21 @@ def log_event(level: str, message: str, details: dict = None):
 
 log_event("INFO", "Backend server starting up...")
 
-app = FastAPI(title="WeatherGPT API")
+app = FastAPI(
+    title="WeatherGPT API",
+    description=(
+        "Shared backend for **weathergpt** (web) and **weathergpt-app** (Flutter).\n\n"
+        "### Web (weathergpt)\n"
+        "- `POST /chat` — conversational agent (message history, location string, farmer mode)\n"
+        "- `GET /dev`, `POST /dev/sandbox` — diagnostics\n\n"
+        "### Mobile (weathergpt-app)\n"
+        "- `GET /weather?lat=&lon=` — home screen conditions\n"
+        "- `GET /advisory`, `/historical`, `/comparison` — persona features\n"
+        "- `POST /chat` — same chat endpoint; may also send `lat`/`lon`\n\n"
+        "Both clients share CORS (`*`) and the same deployment URL."
+    ),
+    version="1.1.0",
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -77,14 +91,26 @@ class ChatMessage(BaseModel):
 
 
 class ChatRequest(BaseModel):
+    """Unified chat body for web + mobile.
+
+    Web typically sends `messages` (history) + `location` + `language` + `farmer_mode`.
+    Mobile typically sends `message` + `location` + optional `lat`/`lon`.
+    Extra fields are ignored so either client can evolve independently.
+    """
+
+    model_config = {"extra": "ignore"}
+
     message: str = ""
     messages: list[dict] = []
     location: str = ""
     language: str = "English"
     farmer_mode: bool = False
     crop: str = ""
+    # Mobile clients often send coordinates so we can skip geocode.
     lat: float | None = None
     lon: float | None = None
+    # Optional hint: "web" | "mobile" | "app" (informational only)
+    client: str = ""
 
 
 class ChatResponse(BaseModel):
@@ -137,30 +163,72 @@ def _is_simple_weather_query(text: str, farmer_mode: bool) -> bool:
     return len(tokens) >= 2 and len(tokens) <= 5 and all(t.isalpha() for t in tokens)
 
 
+
+def _normalize_language(lang: str | None) -> str:
+    """Map mobile ISO codes (en, hi) and web labels (English) to a stable string."""
+    raw = (lang or "").strip()
+    if not raw:
+        return "English"
+    lower = raw.lower().replace("_", "-")
+    code_map = {
+        "en": "English",
+        "en-us": "English",
+        "en-in": "English",
+        "hi": "Hindi",
+        "hi-in": "Hindi",
+        "gu": "Gujarati",
+        "gu-in": "Gujarati",
+        "mr": "Marathi",
+        "mr-in": "Marathi",
+        "ta": "Tamil",
+        "ta-in": "Tamil",
+        "te": "Telugu",
+        "te-in": "Telugu",
+        "bn": "Bengali",
+        "bn-in": "Bengali",
+        "kn": "Kannada",
+        "ml": "Malayalam",
+        "pa": "Punjabi",
+    }
+    if lower in code_map:
+        return code_map[lower]
+    # Already a full language name from web
+    return raw[:1].upper() + raw[1:] if raw else "English"
+
+
+def _resolve_last_user_message(request: "ChatRequest") -> tuple[list | str, str]:
+    """Support web history (`messages`) and mobile single `message`."""
+    if request.messages:
+        payload: list | str = request.messages
+        last_msg = ""
+        for m in reversed(request.messages):
+            if isinstance(m, dict) and m.get("role") == "user":
+                last_msg = str(m.get("content") or "")
+                break
+        if not last_msg and request.message.strip():
+            last_msg = request.message.strip()
+        return payload, last_msg
+    return request.message, request.message.strip()
+
+
 def _run_chat_sync(request: "ChatRequest") -> str:
     """Route simple weather to fast path; complex to timed agent + fallback."""
     from agent import run_deterministic_telemetry_fallback
 
-    payload = request.messages if request.messages else request.message
-    last_msg = ""
-    if isinstance(payload, str):
-        last_msg = payload
-    elif isinstance(payload, list):
-        for m in reversed(payload):
-            if isinstance(m, dict) and m.get("role") == "user":
-                last_msg = str(m.get("content") or "")
-                break
-
-    language = (request.language or "English").strip() or "English"
-    location = (request.location or "New Delhi").strip() or "New Delhi"
+    payload, last_msg = _resolve_last_user_message(request)
+    language = _normalize_language(request.language)
+    location = (request.location or "").strip() or "New Delhi"
     timeout_s = float(os.getenv("CHAT_TIMEOUT_SECONDS", "22"))
     force_fast = os.getenv("CHAT_FAST_PATH", "1") != "0"
+    client = (request.client or "").strip().lower()
+    if client:
+        print(f"[chat] client={client} lang={language} loc={location} lat={request.lat} lon={request.lon}")
 
     def _agent():
         return run_weather_agent(
             payload,
-            request.location,
-            request.language,
+            location,
+            language,
             request.farmer_mode,
             request.crop,
         )
@@ -199,7 +267,21 @@ def _run_chat_sync(request: "ChatRequest") -> str:
 
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
+async def chat(request: ChatRequest, http_request: Request):
+    """Shared chat for web app and Flutter app.
+
+    Accepts either:
+    - Web: `{ messages, location, language, farmer_mode, crop }`
+    - Mobile: `{ message, location, lat?, lon?, language, farmer_mode? }`
+    Response is always `{ "response": "<markdown string>" }`.
+    """
+    # Mobile Dio sends Accept-Language; fill language if body left default.
+    if not request.language or request.language in ("English", "en"):
+        hdr = http_request.headers.get("accept-language", "")
+        if hdr:
+            primary = hdr.split(",")[0].strip().split(";")[0].strip()
+            if primary and request.language in ("", "English") and primary.lower() != "en":
+                request.language = primary
     response = await run_in_threadpool(_run_chat_sync, request)
     return ChatResponse(response=response)
 
@@ -245,10 +327,54 @@ async def sandbox_test(request: SandboxRequest):
         return res
 
 
+@app.get("/")
+async def root():
+    """Service index — confirms dual-client API surface."""
+    return {
+        "service": "WeatherGPT API",
+        "status": "ok",
+        "clients": {
+            "web": {
+                "repo": "weathergpt",
+                "endpoints": ["/chat", "/dev", "/dev/sandbox", "/health"],
+            },
+            "mobile": {
+                "repo": "weathergpt-app",
+                "endpoints": [
+                    "/chat",
+                    "/weather",
+                    "/advisory",
+                    "/historical",
+                    "/comparison",
+                    "/health",
+                ],
+            },
+        },
+        "chat_contract": {
+            "request": {
+                "message": "string (mobile single turn)",
+                "messages": "[{role, content}] (web history)",
+                "location": "string",
+                "lat": "number optional (mobile)",
+                "lon": "number optional (mobile)",
+                "language": "English | en | hi | ...",
+                "farmer_mode": "bool",
+                "crop": "string",
+                "client": "web | mobile optional",
+            },
+            "response": {"response": "markdown string"},
+        },
+    }
+
+
 @app.get("/health")
 @app.get("/health/")
 async def health():
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "clients": ["weathergpt", "weathergpt-app"],
+        "uptime_s": round(time.time() - START_TIME, 1),
+    }
 
 
 @app.get("/dev")
