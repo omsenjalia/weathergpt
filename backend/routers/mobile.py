@@ -37,8 +37,8 @@ def _get_json(url: str, params: dict[str, Any], timeout: float = 12.0) -> dict[s
 
 @router.get("/weather")
 async def get_weather(
-    lat: float = Query(..., description="Latitude"),
-    lon: float = Query(..., description="Longitude"),
+    lat: float = Query(..., ge=-90, le=90, description="Latitude (-90 to 90)"),
+    lon: float = Query(..., ge=-180, le=180, description="Longitude (-180 to 180)"),
     language: str = Query("en", description="Preferred language code"),
 ) -> dict[str, Any]:
     """Current conditions + today high/low + 3-day outlook for the Flutter home screens."""
@@ -198,8 +198,8 @@ def _build_weather_snapshot(lat: float, lon: float, language: str) -> dict[str, 
 
 @router.get("/advisory")
 async def get_advisory(
-    lat: float = Query(...),
-    lon: float = Query(...),
+    lat: float = Query(..., ge=-90, le=90),
+    lon: float = Query(..., ge=-180, le=180),
     crop: str = Query("", description="Optional crop name"),
     days: int = Query(3, ge=1, le=7),
 ) -> dict[str, Any]:
@@ -280,8 +280,8 @@ async def get_advisory(
 
 @router.get("/historical")
 async def get_historical(
-    lat: float = Query(...),
-    lon: float = Query(...),
+    lat: float = Query(..., ge=-90, le=90),
+    lon: float = Query(..., ge=-180, le=180),
     metric: str = Query("rainfall", description="rainfall | temperature | humidity"),
     start_year: int = Query(2000, ge=1940, le=2100),
     end_year: int = Query(2024, ge=1940, le=2100),
@@ -373,7 +373,11 @@ async def get_comparison(
         name, lat_s, lon_s = parts
         try:
             lat_f, lon_f = float(lat_s), float(lon_s)
-        except ValueError:
+        except (TypeError, ValueError):
+            continue
+        # Validate parsed coordinates here too: this route calls the handler directly,
+        # so FastAPI's Query constraints on /historical do not run automatically.
+        if not (-90 <= lat_f <= 90 and -180 <= lon_f <= 180):
             continue
         hist = await get_historical(
             lat=lat_f,

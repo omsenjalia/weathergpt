@@ -84,6 +84,17 @@ def test_weather_requires_coords():
     assert response.status_code == 422
 
 
+def test_weather_rejects_out_of_range_coordinates():
+    for params in ({"lat": 91, "lon": 72}, {"lat": 23, "lon": -181}, {"lat": "nan", "lon": 72}):
+        response = client.get("/weather", params=params)
+        assert response.status_code == 422
+
+
+def test_comparison_skips_invalid_coordinates():
+    response = client.get("/comparison", params={"locations": "Bad,91,72"})
+    assert response.status_code == 400
+
+
 def test_weather_endpoint_schema():
     """GET /weather returns fields expected by the Flutter home screens."""
     response = client.get("/weather", params={"lat": 23.0225, "lon": 72.5714})
