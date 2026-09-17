@@ -15,6 +15,14 @@ from dataclasses import dataclass
 
 from schemas import ChatRequest, ClientKind
 
+try:
+    from services.response import sanitize_response
+except ImportError:  # pragma: no cover
+    try:
+        from backend.services.response import sanitize_response  # type: ignore
+    except ImportError:
+        sanitize_response = None  # type: ignore
+
 LANGUAGE_CODE_MAP: dict[str, str] = {
     "en": "English", "en-us": "English", "en-in": "English", "en-gb": "English",
     "hi": "Hindi", "hi-in": "Hindi",
@@ -147,6 +155,14 @@ def run_chat(request: ChatRequest, *, client: ClientKind = "unknown") -> ChatRes
     fast_path = os.getenv("CHAT_FAST_PATH", "1") != "0"
 
     def _result(text: str, path: str) -> ChatResult:
+        try:
+            if sanitize_response is not None:
+                cleaned = sanitize_response(text)
+                # Use cleaned if it has content, otherwise fall back to original
+                if cleaned and cleaned.strip():
+                    return ChatResult(cleaned, path, client, language, location)
+        except Exception as e:
+            print(f"[chat] sanitize_response failed: {e}")
         return ChatResult(text, path, client, language, location)
 
     def _fallback(path: str = "fallback") -> ChatResult:

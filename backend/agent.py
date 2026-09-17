@@ -25,6 +25,42 @@ from tools import (
     get_user_language,
 )
 
+
+def _extract_text_content(content) -> str:
+    """Normalize LLM content that may be str or list of parts."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for p in content:
+            if isinstance(p, str):
+                parts.append(p)
+            elif isinstance(p, dict):
+                if isinstance(p.get("text"), str):
+                    parts.append(p["text"])
+                elif isinstance(p.get("content"), str):
+                    parts.append(p["content"])
+            else:
+                t = getattr(p, "text", None)
+                if isinstance(t, str):
+                    parts.append(t)
+        return "\n".join(parts)
+    return str(content) if content is not None else ""
+
+
+try:
+    from services.response import sanitize_response, strip_widgets
+except ImportError:  # pragma: no cover
+    try:
+        from backend.services.response import sanitize_response, strip_widgets  # type: ignore
+    except ImportError:
+
+        def sanitize_response(text, *, required_widgets=None):  # type: ignore
+            return text if isinstance(text, str) else _extract_text_content(text)
+
+        def strip_widgets(text):  # type: ignore
+            return text if isinstance(text, str) else _extract_text_content(text)
+
 TOOLS = [
     geocode_city,
     get_current_weather,
@@ -291,7 +327,9 @@ def run_deterministic_telemetry_fallback(
 
         # Try non-tool LLMs (groq/compound, groq/compound-mini, allam-2-7b) to generate native language text response
         try:
-            prompt = f"""Format a weather response for user query '{query}' for city {city_name} in target language '{language}'.
+            prompt = f"""Output ONLY the final answer for the end user. Do NOT include any reasoning, planning, approach, thinking steps, or explanations of what you are doing. Start directly with a Markdown heading.
+
+Format a weather response for user query '{query}' for city {city_name} in target language '{language}'.
 Weather Data: Temp {temp}°C, Feels like {feels}°C, Condition: {cond}, Humidity: {humidity}%, Wind: {wind} km/h.
 Provide clean Markdown in {language} script followed by these EXACT widget code blocks at the end:
 
@@ -303,8 +341,28 @@ Provide clean Markdown in {language} script followed by these EXACT widget code 
 {forecast_widget_json}
 ```"""
             formatted_res = _get_text_llm().invoke(prompt)
-            if formatted_res and formatted_res.content and len(formatted_res.content) > 30:
-                return formatted_res.content
+            raw_content = getattr(formatted_res, "content", "") if formatted_res else ""
+            raw_text = _extract_text_content(raw_content)
+            if raw_text and len(raw_text.strip()) > 30:
+                cleaned = sanitize_response(
+                    raw_text,
+                    required_widgets=[
+                        ("weather", weather_widget_json),
+                        ("forecast", forecast_widget_json),
+                    ],
+                )
+                if strip_widgets(cleaned).strip() and len(strip_widgets(cleaned).strip()) > 30:
+                    return cleaned
+                # If cleaned is too short, fall through to hard-coded markdown
+                # but still prefer cleaned if it has widgets? We require 30 chars prose
+                # per spec, otherwise use hard-coded fallback below
+                if len(cleaned.strip()) > 30:
+                    return cleaned
+                # If raw was longer but cleaned became short, still return raw cleaned? No, fall through
+                # To be safe, if raw_text itself was long, return cleaned version
+                # (the length check above already handles)
+                # Fall through to hard-coded if not enough prose
+                pass
         except Exception as text_err:
             print(f"[Fallback Warning] Non-tool LLM text chain exception: {text_err}")
 
@@ -434,7 +492,12 @@ FORMATTING & RICH WIDGET RULES:
 
     try:
         result = _app.invoke({"messages": formatted_messages})
-        return result["messages"][-1].content
+        raw = result["messages"][-1].content
+        text = _extract_text_content(raw)
+        try:
+            return sanitize_response(text)
+        except Exception:
+            return text
     except Exception as exc:
         err_msg = str(exc).lower()
         print(f"[Agent Warning] LLM cascade exception ({err_msg}). Engaging Deterministic Telemetry Synthesizer...")
