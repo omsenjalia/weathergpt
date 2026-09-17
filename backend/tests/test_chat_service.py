@@ -10,6 +10,7 @@ from services.chat import (
     detect_client,
     is_greeting_or_meta,
     is_simple_weather_query,
+    is_weather_related,
     normalize_language,
     resolve_history,
 )
@@ -49,3 +50,15 @@ def test_greeting_and_simple_heuristics():
     assert not is_simple_weather_query("should I irrigate wheat tomorrow?", False)
     assert not is_simple_weather_query("weather in delhi", True)  # farmer mode → agent
     assert not is_simple_weather_query("compare mumbai and pune rainfall", False)
+
+
+def test_weather_domain_allows_conversation_and_research():
+    assert is_weather_related("No, I mean chances of raining")
+    assert is_weather_related("Explain why the forecast changed")
+    assert is_weather_related("Compare Mumbai and Pune rainfall historically")
+    assert is_weather_related("Should I carry an umbrella?")
+
+
+def test_unrelated_requests_do_not_take_weather_fast_path():
+    assert not is_simple_weather_query("write Python code for a weather app", False)
+    assert not is_weather_related("Help me study for my exam")

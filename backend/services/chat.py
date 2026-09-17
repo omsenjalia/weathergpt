@@ -54,8 +54,25 @@ SIMPLE_MARKERS = (
     "weather", "temperature", "temp", "forecast", "rain", "humidity",
     "wind", "aqi", "uv", "hot", "cold", "mausam", "baarish", "hawa",
     "degree", "celsius", "condition", "climate", "storm", "thunder",
-    "heat", "cool", "cloudy", "sunny", "monsoon",
+    "heat", "cool", "cloudy", "sunny", "monsoon", "umbrella",
 )
+
+# These phrases must never take the deterministic weather path merely because they
+# mention weather. The agent still receives them so its domain guard can explain that
+# coding/study requests are outside scope.
+OFF_TOPIC_MARKERS = (
+    "write code", "write a program", "python", "javascript", "programming",
+    "debug", "homework", "exam", "study", "solve this equation", "essay",
+    "recipe", "football", "movie", "politics",
+)
+
+
+def is_weather_related(text: str) -> bool:
+    """Broad domain check: conversational and research weather requests are allowed."""
+    q = (text or "").lower().strip()
+    return bool(q) and not any(marker in q for marker in OFF_TOPIC_MARKERS) and any(
+        marker in q for marker in SIMPLE_MARKERS + COMPLEX_MARKERS
+    )
 
 GREETING_REPLY = (
     "I'm **WeatherGPT** — I help with live weather, forecasts, rain alerts, "
@@ -120,6 +137,8 @@ def is_simple_weather_query(text: str, farmer_mode: bool) -> bool:
         return False
     q = (text or "").lower().strip()
     if not q or len(q) > 220 or is_greeting_or_meta(q):
+        return False
+    if any(m in q for m in OFF_TOPIC_MARKERS):
         return False
     if any(m in q for m in COMPLEX_MARKERS):
         return False
