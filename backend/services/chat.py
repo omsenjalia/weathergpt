@@ -105,7 +105,13 @@ def is_greeting_or_meta(text: str) -> bool:
         return True
     if q in GREETINGS:
         return True
-    return any(q.startswith(g + sep) for g in GREETINGS for sep in (" ", "?", "!", ","))
+    # Only greeting phrases support a prefix match.  Bare acknowledgements such as
+    # "no" and "yes" are valid greetings/meta replies when standalone, but must not
+    # swallow contextual follow-ups like "no, I mean chances of raining".
+    prefix_greetings = tuple(
+        g for g in GREETINGS if g not in {"yes", "no", "ok", "okay", "help"}
+    )
+    return any(q.startswith(g + sep) for g in prefix_greetings for sep in (" ", "?", "!", ","))
 
 
 def is_simple_weather_query(text: str, farmer_mode: bool) -> bool:

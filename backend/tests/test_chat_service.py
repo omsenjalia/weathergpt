@@ -43,6 +43,8 @@ def test_greeting_and_simple_heuristics():
     assert is_greeting_or_meta("Hello!")
     assert is_greeting_or_meta("who are you?")
     assert not is_greeting_or_meta("weather in delhi")
+    assert not is_greeting_or_meta("no i am talking about chances of raining")
+    assert is_simple_weather_query("no i am talking about chances of raining", False)
     assert is_simple_weather_query("weather in delhi", False)
     assert not is_simple_weather_query("should I irrigate wheat tomorrow?", False)
     assert not is_simple_weather_query("weather in delhi", True)  # farmer mode → agent
