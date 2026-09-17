@@ -54,8 +54,47 @@ SIMPLE_MARKERS = (
     "weather", "temperature", "temp", "forecast", "rain", "humidity",
     "wind", "aqi", "uv", "hot", "cold", "mausam", "baarish", "hawa",
     "degree", "celsius", "condition", "climate", "storm", "thunder",
-    "heat", "cool", "cloudy", "sunny", "monsoon",
+    "heat", "cool", "cloudy", "sunny", "monsoon", "umbrella",
 )
+
+# These phrases must never take the deterministic weather path merely because they
+# mention weather. The agent still receives them so its domain guard can explain that
+# coding/study requests are outside scope.
+OFF_TOPIC_MARKERS = (
+    "write code", "write a program", "python", "javascript", "programming",
+    "debug", "homework", "exam", "study", "solve this equation", "essay",
+    "recipe", "football", "movie", "politics",
+)
+
+
+def is_weather_related(text: str) -> bool:
+    """Broad domain check: conversational and research weather requests are allowed."""
+    q = (text or "").lower().strip()
+    return bool(q) and not any(marker in q for marker in OFF_TOPIC_MARKERS) and any(
+        marker in q for marker in SIMPLE_MARKERS + COMPLEX_MARKERS
+    )
+
+
+def classify_intent(text: str) -> str:
+    """Return a transparent, stable intent label for clients and diagnostics."""
+    q = (text or "").lower().strip()
+    if is_greeting_or_meta(q):
+        return "greeting"
+    if any(marker in q for marker in OFF_TOPIC_MARKERS):
+        return "unrelated"
+    if any(marker in q for marker in ("historical", "history", "last year", "trend", "anomaly")):
+        return "historical_weather"
+    if any(marker in q for marker in ("compare", "versus", " vs ", "provider", "accuracy")):
+        return "weather_comparison"
+    if any(marker in q for marker in ("why", "explain", "how does", "what causes")):
+        return "weather_explanation"
+    if any(marker in q for marker in ("rain", "raining", "rainfall", "precipitation", "umbrella")):
+        return "rain_probability"
+    if any(marker in q for marker in SIMPLE_MARKERS):
+        return "weather_current_or_forecast"
+    if q:
+        return "weather_conversation"
+    return "ambiguous"
 
 GREETING_REPLY = (
     "I'm **WeatherGPT** — I help with live weather, forecasts, rain alerts, "
@@ -105,7 +144,13 @@ def is_greeting_or_meta(text: str) -> bool:
         return True
     if q in GREETINGS:
         return True
-    return any(q.startswith(g + sep) for g in GREETINGS for sep in (" ", "?", "!", ","))
+    # Only greeting phrases support a prefix match.  Bare acknowledgements such as
+    # "no" and "yes" are valid greetings/meta replies when standalone, but must not
+    # swallow contextual follow-ups like "no, I mean chances of raining".
+    prefix_greetings = tuple(
+        g for g in GREETINGS if g not in {"yes", "no", "ok", "okay", "help"}
+    )
+    return any(q.startswith(g + sep) for g in prefix_greetings for sep in (" ", "?", "!", ","))
 
 
 def is_simple_weather_query(text: str, farmer_mode: bool) -> bool:
@@ -114,6 +159,8 @@ def is_simple_weather_query(text: str, farmer_mode: bool) -> bool:
         return False
     q = (text or "").lower().strip()
     if not q or len(q) > 220 or is_greeting_or_meta(q):
+        return False
+    if any(m in q for m in OFF_TOPIC_MARKERS):
         return False
     if any(m in q for m in COMPLEX_MARKERS):
         return False
@@ -135,6 +182,27 @@ def resolve_history(request: ChatRequest) -> tuple[list[dict] | str, str]:
     return request.message, request.message.strip()
 
 
+def resolve_weather_context(request: ChatRequest, last_message: str) -> str:
+    """Build a bounded query for deterministic fallback location/topic resolution.
+
+    The fallback has no LLM memory, so a follow-up such as "what about tomorrow?"
+    must carry enough recent user context to recover the city from an earlier turn.
+    Assistant replies are deliberately excluded because they may contain many cities.
+    """
+    if not request.messages:
+        return last_message.strip()
+    user_messages = [
+        str(item.get("content") or "").strip()
+        for item in request.messages
+        if isinstance(item, dict) and item.get("role") == "user" and item.get("content")
+    ]
+    user_messages = [message for message in user_messages if message]
+    if not user_messages:
+        return last_message.strip()
+    # Keep the latest turn prominent and cap input to avoid excessive geocoder work.
+    return " ".join(user_messages[-3:])[:600]
+
+
 @dataclass
 class ChatResult:
     response: str
@@ -142,6 +210,7 @@ class ChatResult:
     client: ClientKind
     language: str
     location: str
+    intent: str
 
 
 def run_chat(request: ChatRequest, *, client: ClientKind = "unknown") -> ChatResult:
@@ -149,7 +218,9 @@ def run_chat(request: ChatRequest, *, client: ClientKind = "unknown") -> ChatRes
     from agent import run_deterministic_telemetry_fallback, run_weather_agent, has_llm
 
     payload, last_msg = resolve_history(request)
+    context_query = resolve_weather_context(request, last_msg)
     language = normalize_language(request.language)
+    intent = classify_intent(context_query)
     location = (request.location or "").strip() or "New Delhi"
     timeout_s = float(os.getenv("CHAT_TIMEOUT_SECONDS", "22"))
     fast_path = os.getenv("CHAT_FAST_PATH", "1") != "0"
@@ -160,15 +231,15 @@ def run_chat(request: ChatRequest, *, client: ClientKind = "unknown") -> ChatRes
                 cleaned = sanitize_response(text)
                 # Use cleaned if it has content, otherwise fall back to original
                 if cleaned and cleaned.strip():
-                    return ChatResult(cleaned, path, client, language, location)
+                    return ChatResult(cleaned, path, client, language, location, intent)
         except Exception as e:
             print(f"[chat] sanitize_response failed: {e}")
-        return ChatResult(text, path, client, language, location)
+        return ChatResult(text, path, client, language, location, intent)
 
     def _fallback(path: str = "fallback") -> ChatResult:
         return _result(
             run_deterministic_telemetry_fallback(
-                location, last_msg, language, lat=request.lat, lon=request.lon
+                location, context_query, language, lat=request.lat, lon=request.lon
             ),
             path,
         )

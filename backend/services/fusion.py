@@ -353,6 +353,12 @@ def fuse_readings(readings: list[ProviderReading]) -> dict[str, Any]:
         "uv_index": round(uv, 1) if uv is not None else None,
         "temp_spread_c": spread,
         "confidence": confidence,
+        "warning": (
+            "Providers disagree significantly on temperature."
+            if confidence == "low" else
+            "Only one provider returned usable data."
+            if confidence == "single-source" else None
+        ),
         "providers": [r.as_dict() for r in readings],
         "weights": {r.name: r.weight for r in readings},
     }

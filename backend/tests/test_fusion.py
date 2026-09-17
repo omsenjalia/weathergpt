@@ -35,6 +35,7 @@ def test_weighted_mean_uses_weights():
     assert fused["weathercode"] == 1
     assert fused["condition"] == "Mainly clear"  # from highest-weighted provider with a condition
     assert fused["confidence"] == "medium"
+    assert fused["warning"] is None
 
 
 def test_missing_metrics_are_not_defaulted():
@@ -62,6 +63,7 @@ def test_single_source():
     fused = fuse_readings([_r("Open-Meteo (ECMWF)", 28.4, code=61)])
     assert fused["temperature_2m"] == 28.4
     assert fused["confidence"] == "single-source"
+    assert fused["warning"] == "Only one provider returned usable data."
     assert fused["condition"] == "Slight rain"
 
 

@@ -19,6 +19,7 @@ Vercel:       api/index.py re-exports `app`.
 from __future__ import annotations
 
 import time
+import uuid
 
 from dotenv import load_dotenv
 
@@ -74,23 +75,25 @@ def create_app() -> FastAPI:
     @app.middleware("http")
     async def log_requests(request: Request, call_next):
         start = time.time()
+        request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
         try:
             response = await call_next(request)
         except Exception as exc:  # last-resort guard so clients always get JSON
             duration_ms = round((time.time() - start) * 1000, 2)
-            log_event("ERROR", f"HTTP {request.method} {request.url.path} failed: {exc}",
-                      {"duration_ms": duration_ms, "error": str(exc)})
+            log_event("ERROR", f"HTTP {request.method} {request.url.path} failed",
+                      {"duration_ms": duration_ms, "request_id": request_id, "error": str(exc)})
             return JSONResponse(
                 status_code=500,
-                content={"detail": "Internal server error", "error": str(exc)},
-                headers={"Access-Control-Allow-Origin": "*"},
+                content={"detail": "Internal server error", "request_id": request_id},
+                headers={"Access-Control-Allow-Origin": "*", "X-Request-ID": request_id},
             )
         if request.url.path not in QUIET_PATHS:
             log_event(
                 "INFO",
                 f"HTTP {request.method} {request.url.path} -> {response.status_code}",
-                {"duration_ms": round((time.time() - start) * 1000, 2)},
+                {"duration_ms": round((time.time() - start) * 1000, 2), "request_id": request_id},
             )
+        response.headers["X-Request-ID"] = request_id
         return response
 
     app.include_router(chat_router.router)

@@ -28,6 +28,19 @@ from services.open_meteo import (
 router = APIRouter(tags=["mobile"])
 
 
+def _bounded(value: Any, low: float | None = None, high: float | None = None) -> float | None:
+    """Return finite numeric upstream data, optionally constrained to a physical range."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number or number in (float("inf"), float("-inf")):
+        return None
+    if low is not None and number < low or high is not None and number > high:
+        return None
+    return number
+
+
 def _get_json(url: str, params: dict[str, Any], timeout: float = 12.0) -> dict[str, Any]:
     try:
         return get_json(url, params, timeout=timeout)
@@ -37,8 +50,8 @@ def _get_json(url: str, params: dict[str, Any], timeout: float = 12.0) -> dict[s
 
 @router.get("/weather")
 async def get_weather(
-    lat: float = Query(..., description="Latitude"),
-    lon: float = Query(..., description="Longitude"),
+    lat: float = Query(..., ge=-90, le=90, description="Latitude (-90 to 90)"),
+    lon: float = Query(..., ge=-180, le=180, description="Longitude (-180 to 180)"),
     language: str = Query("en", description="Preferred language code"),
 ) -> dict[str, Any]:
     """Current conditions + today high/low + 3-day outlook for the Flutter home screens."""
@@ -165,6 +178,13 @@ def _build_weather_snapshot(lat: float, lon: float, language: str) -> dict[str, 
     except Exception as fuse_err:
         print(f"[mobile /weather] fusion skipped: {fuse_err}")
 
+    # Defensive normalization keeps malformed upstream values from reaching clients.
+    temp_c = _bounded(temp_c, -100, 70)
+    feels_c = _bounded(feels_c, -100, 80)
+    humidity = _bounded(humidity, 0, 100)
+    wind_kmh = _bounded(wind_kmh, 0, 500)
+    pressure = _bounded(pressure, 800, 1200)
+    rain_probability = _bounded(rain_probs[0] if rain_probs else None, 0, 100)
     return {
         "lat": lat,
         "lon": lon,
@@ -175,7 +195,7 @@ def _build_weather_snapshot(lat: float, lon: float, language: str) -> dict[str, 
         "weather_code": weather_code,
         "high_c": highs[0] if highs else temp_c,
         "low_c": lows[0] if lows else temp_c,
-        "rain_probability": rain_probs[0] if rain_probs else 0,
+        "rain_probability": rain_probability if rain_probability is not None else 0,
         "wind_kmh": wind_kmh,
         "wind_direction": wind_dir,
         "humidity": humidity,
@@ -198,8 +218,8 @@ def _build_weather_snapshot(lat: float, lon: float, language: str) -> dict[str, 
 
 @router.get("/advisory")
 async def get_advisory(
-    lat: float = Query(...),
-    lon: float = Query(...),
+    lat: float = Query(..., ge=-90, le=90),
+    lon: float = Query(..., ge=-180, le=180),
     crop: str = Query("", description="Optional crop name"),
     days: int = Query(3, ge=1, le=7),
 ) -> dict[str, Any]:
@@ -280,8 +300,8 @@ async def get_advisory(
 
 @router.get("/historical")
 async def get_historical(
-    lat: float = Query(...),
-    lon: float = Query(...),
+    lat: float = Query(..., ge=-90, le=90),
+    lon: float = Query(..., ge=-180, le=180),
     metric: str = Query("rainfall", description="rainfall | temperature | humidity"),
     start_year: int = Query(2000, ge=1940, le=2100),
     end_year: int = Query(2024, ge=1940, le=2100),
@@ -373,7 +393,11 @@ async def get_comparison(
         name, lat_s, lon_s = parts
         try:
             lat_f, lon_f = float(lat_s), float(lon_s)
-        except ValueError:
+        except (TypeError, ValueError):
+            continue
+        # Validate parsed coordinates here too: this route calls the handler directly,
+        # so FastAPI's Query constraints on /historical do not run automatically.
+        if not (-90 <= lat_f <= 90 and -180 <= lon_f <= 180):
             continue
         hist = await get_historical(
             lat=lat_f,

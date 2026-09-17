@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ChatMessage(BaseModel):
@@ -31,9 +31,26 @@ class ChatRequest(BaseModel):
     language: str = "English"
     farmer_mode: bool = False
     crop: str = ""
-    lat: float | None = None
-    lon: float | None = None
+    lat: float | None = Field(default=None, ge=-90, le=90)
+    lon: float | None = Field(default=None, ge=-180, le=180)
     client: str = ""  # optional hint: "web" | "mobile" | "app"
+
+    @field_validator("message", "location", "language", "crop", "client", mode="before")
+    @classmethod
+    def normalize_text_fields(cls, value):
+        # JSON nulls and non-string scalar values should not crash routing or .strip().
+        return "" if value is None else str(value)
+
+    @field_validator("messages", mode="before")
+    @classmethod
+    def normalize_messages(cls, value):
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            return []
+        # Keep only object-shaped history entries. Invalid entries are ignored rather
+        # than causing a late 500 in the LLM adapter.
+        return [item for item in value if isinstance(item, dict)]
 
 
 class ChatResponse(BaseModel):
