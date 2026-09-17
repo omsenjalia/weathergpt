@@ -490,11 +490,11 @@ export default function DevView({ location, language }) {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
                 {[
-                  { name: 'Open-Meteo (ECMWF)', key: 'openmeteo', weight: '1.0', active: true },
+                  { name: 'Open-Meteo (ECMWF)', key: 'openmeteo', weight: '2.0', active: true },
+                  { name: 'AccuWeather', key: 'accuweather', weight: '1.5', active: !!ensembleData?.providersUsed?.some((p) => p.name.includes('AccuWeather')) },
                   { name: 'WeatherAPI.com', key: 'weatherapi', weight: '1.2', active: !!ensembleData?.providersUsed?.some((p) => p.name.includes('WeatherAPI')) },
                   { name: 'Tomorrow.io', key: 'tomorrow', weight: '1.2', active: !!ensembleData?.providersUsed?.some((p) => p.name.includes('Tomorrow')) },
                   { name: 'OpenWeatherMap', key: 'openweather', weight: '1.1', active: !!ensembleData?.providersUsed?.some((p) => p.name.includes('OpenWeather')) },
-                  { name: 'AccuWeather', key: 'accuweather', weight: '1.25', active: !!ensembleData?.providersUsed?.some((p) => p.name.includes('AccuWeather')) },
                 ].map((p, i) => {
                   const providerObj = ensembleData?.providersUsed?.find((used) => used.name.toLowerCase().includes(p.key.toLowerCase())) || (p.key === 'openmeteo' ? ensembleData?.providersUsed?.[0] : null)
                   return (

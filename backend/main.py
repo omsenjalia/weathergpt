@@ -1,444 +1,129 @@
-import os
-import concurrent.futures
-import sys
+"""WeatherGPT API — single FastAPI app serving two clients.
+
+    weathergpt  (web,    React/Vite)   → POST /chat, GET /dev, POST /dev/sandbox, GET /fusion
+    weathergpt-app (mobile, Flutter)   → POST /chat, GET /weather, /advisory, /historical, /comparison
+
+Layout
+------
+    main.py            app factory + middleware (this file)
+    schemas.py         shared pydantic contracts
+    state.py           uptime + recent-log ring buffer
+    services/          open_meteo (baseline provider), fusion (ensemble), chat (routing policy)
+    routers/           chat, mobile, dev
+    agent.py, tools.py LangGraph agent + telemetry tools (unchanged public API)
+
+Run locally:  uvicorn main:app --host 0.0.0.0 --port 8888
+Vercel:       api/index.py re-exports `app`.
+"""
+
+from __future__ import annotations
+
 import time
-import platform
-try:
-    import psutil
-except ImportError:
-    psutil = None
-from datetime import datetime
-from collections import deque
+
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import FastAPI, Request
-from fastapi.concurrency import run_in_threadpool
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from fastapi import FastAPI, Request  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from fastapi.responses import JSONResponse  # noqa: E402
 
-from agent import run_weather_agent, GROQ_MODEL, TOOLS
-from mobile_api import router as mobile_router
+from routers import chat as chat_router  # noqa: E402
+from routers import dev as dev_router  # noqa: E402
+from routers import mobile as mobile_router  # noqa: E402
+from state import log_event  # noqa: E402
 
-START_TIME = time.time()
-START_DATETIME = datetime.now().isoformat()
-RECENT_LOGS = deque(maxlen=50)
+API_VERSION = "2.0.0"
+QUIET_PATHS = {"/health", "/health/", "/dev", "/dev/"}
 
-def log_event(level: str, message: str, details: dict = None):
-    entry = {
-        "timestamp": datetime.now().isoformat(),
-        "level": level,
-        "message": message,
-        "details": details or {}
-    }
-    RECENT_LOGS.appendleft(entry)
-
-log_event("INFO", "Backend server starting up...")
-
-app = FastAPI(
-    title="WeatherGPT API",
-    description=(
-        "Shared backend for **weathergpt** (web) and **weathergpt-app** (Flutter).\n\n"
-        "### Web (weathergpt)\n"
-        "- `POST /chat` — conversational agent (message history, location string, farmer mode)\n"
-        "- `GET /dev`, `POST /dev/sandbox` — diagnostics\n\n"
-        "### Mobile (weathergpt-app)\n"
-        "- `GET /weather?lat=&lon=` — home screen conditions\n"
-        "- `GET /advisory`, `/historical`, `/comparison` — persona features\n"
-        "- `POST /chat` — same chat endpoint; may also send `lat`/`lon`\n\n"
-        "Both clients share CORS (`*`) and the same deployment URL."
-    ),
-    version="1.1.0",
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-app.include_router(mobile_router)
-
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    start = time.time()
-    try:
-        response = await call_next(request)
-        duration_ms = round((time.time() - start) * 1000, 2)
-        if request.url.path not in ["/health", "/dev", "/health/", "/dev/"]:
-            log_event("INFO", f"HTTP {request.method} {request.url.path} -> {response.status_code}", {"duration_ms": duration_ms})
-        response.headers["Access-Control-Allow-Origin"] = "*"
-        response.headers["Access-Control-Allow-Methods"] = "*"
-        response.headers["Access-Control-Allow-Headers"] = "*"
-        return response
-    except Exception as exc:
-        duration_ms = round((time.time() - start) * 1000, 2)
-        log_event("ERROR", f"HTTP {request.method} {request.url.path} failed: {str(exc)}", {"duration_ms": duration_ms, "error": str(exc)})
-        res = JSONResponse(status_code=500, content={"error": str(exc)})
-        res.headers["Access-Control-Allow-Origin"] = "*"
-        res.headers["Access-Control-Allow-Methods"] = "*"
-        res.headers["Access-Control-Allow-Headers"] = "*"
-        return res
+CHAT_CONTRACT = {
+    "request": {
+        "message": "string (mobile single turn)",
+        "messages": "[{role, content}] (web history; mobile may also send)",
+        "location": "string",
+        "lat": "number optional (mobile)",
+        "lon": "number optional (mobile)",
+        "language": "English | Hindi | ... (web) or en | hi | ... (mobile / Accept-Language)",
+        "farmer_mode": "bool",
+        "crop": "string",
+        "client": "web | mobile optional hint",
+    },
+    "response": {"response": "markdown string", "meta": "{path, client, language, location}"},
+}
 
 
-class ChatMessage(BaseModel):
-    role: str
-    content: str
-
-
-class ChatRequest(BaseModel):
-    """Unified chat body for web + mobile.
-
-    Web typically sends `messages` (history) + `location` + `language` + `farmer_mode`.
-    Mobile typically sends `message` + `location` + optional `lat`/`lon`.
-    Extra fields are ignored so either client can evolve independently.
-    """
-
-    model_config = {"extra": "ignore"}
-
-    message: str = ""
-    messages: list[dict] = []
-    location: str = ""
-    language: str = "English"
-    farmer_mode: bool = False
-    crop: str = ""
-    # Mobile clients often send coordinates so we can skip geocode.
-    lat: float | None = None
-    lon: float | None = None
-    # Optional hint: "web" | "mobile" | "app" (informational only)
-    client: str = ""
-
-
-class ChatResponse(BaseModel):
-    response: str
-
-
-def _is_greeting_or_meta(text: str) -> bool:
-    q = (text or "").strip().lower()
-    if not q:
-        return True
-    greetings = (
-        "hi", "hello", "hey", "yo", "sup", "namaste", "namaskar",
-        "good morning", "good evening", "good night", "thanks", "thank you",
-        "what do you do", "who are you", "help", "what can you do",
-        "how are you", "ok", "okay", "yes", "no",
+def create_app() -> FastAPI:
+    app = FastAPI(
+        title="WeatherGPT API",
+        version=API_VERSION,
+        description=(
+            "Shared backend for **weathergpt** (web) and **weathergpt-app** (Flutter).\n\n"
+            "Current conditions everywhere come from the multi-provider fusion engine with "
+            "priority **Open-Meteo > AccuWeather > WeatherAPI / Tomorrow.io / OpenWeatherMap**."
+        ),
     )
-    if q in greetings:
-        return True
-    if any(q.startswith(g + " ") or q.startswith(g + "?") or q.startswith(g + "!") for g in greetings):
-        return True
-    return False
 
-
-def _is_simple_weather_query(text: str, farmer_mode: bool) -> bool:
-    """Heuristic: current conditions / short forecast → deterministic path only."""
-    if farmer_mode:
-        return False
-    q = (text or "").lower().strip()
-    if not q or len(q) > 220:
-        return False
-    if _is_greeting_or_meta(q):
-        return False
-    complex_markers = (
-        "compare", "historical", "anomaly", "trend", "why", "explain",
-        "irrigat", "pesticide", "spray", "harvest", "sow", "crop advice",
-        "multi-day plan", "week ahead detailed",
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=False,  # must be False when allow_origins is "*" (browser rule)
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
-    if any(m in q for m in complex_markers):
-        return False
-    simple_markers = (
-        "weather", "temperature", "temp", "forecast", "rain", "humidity",
-        "wind", "aqi", "uv", "hot", "cold", "mausam", "baarish", "hawa",
-        "degree", "celsius", "condition", "climate", "storm", "thunder",
-        "heat", "cool", "cloudy", "sunny", "monsoon",
-    )
-    if any(m in q for m in simple_markers):
-        return True
-    # Multi-word place-like queries only (avoid "hi" / "help")
-    tokens = [t for t in q.replace("?", " ").split() if t]
-    return len(tokens) >= 2 and len(tokens) <= 5 and all(t.isalpha() for t in tokens)
 
-
-
-def _normalize_language(lang: str | None) -> str:
-    """Map mobile ISO codes (en, hi) and web labels (English) to a stable string."""
-    raw = (lang or "").strip()
-    if not raw:
-        return "English"
-    lower = raw.lower().replace("_", "-")
-    code_map = {
-        "en": "English",
-        "en-us": "English",
-        "en-in": "English",
-        "hi": "Hindi",
-        "hi-in": "Hindi",
-        "gu": "Gujarati",
-        "gu-in": "Gujarati",
-        "mr": "Marathi",
-        "mr-in": "Marathi",
-        "ta": "Tamil",
-        "ta-in": "Tamil",
-        "te": "Telugu",
-        "te-in": "Telugu",
-        "bn": "Bengali",
-        "bn-in": "Bengali",
-        "kn": "Kannada",
-        "ml": "Malayalam",
-        "pa": "Punjabi",
-    }
-    if lower in code_map:
-        return code_map[lower]
-    # Already a full language name from web
-    return raw[:1].upper() + raw[1:] if raw else "English"
-
-
-def _resolve_last_user_message(request: "ChatRequest") -> tuple[list | str, str]:
-    """Support web history (`messages`) and mobile single `message`."""
-    if request.messages:
-        payload: list | str = request.messages
-        last_msg = ""
-        for m in reversed(request.messages):
-            if isinstance(m, dict) and m.get("role") == "user":
-                last_msg = str(m.get("content") or "")
-                break
-        if not last_msg and request.message.strip():
-            last_msg = request.message.strip()
-        return payload, last_msg
-    return request.message, request.message.strip()
-
-
-def _run_chat_sync(request: "ChatRequest") -> str:
-    """Route simple weather to fast path; complex to timed agent + fallback."""
-    from agent import run_deterministic_telemetry_fallback
-
-    payload, last_msg = _resolve_last_user_message(request)
-    language = _normalize_language(request.language)
-    location = (request.location or "").strip() or "New Delhi"
-    timeout_s = float(os.getenv("CHAT_TIMEOUT_SECONDS", "22"))
-    force_fast = os.getenv("CHAT_FAST_PATH", "1") != "0"
-    client = (request.client or "").strip().lower()
-    if client:
-        print(f"[chat] client={client} lang={language} loc={location} lat={request.lat} lon={request.lon}")
-
-    def _agent():
-        return run_weather_agent(
-            payload,
-            location,
-            language,
-            request.farmer_mode,
-            request.crop,
-        )
-
-    # Greetings / meta: short helpful reply without weather telemetry or agent.
-    if _is_greeting_or_meta(last_msg):
-        return (
-            "I'm **WeatherGPT** — I help with live weather, forecasts, rain alerts, "
-            "air quality, and farming advisories.\n\n"
-            "Try asking: *Will it rain tomorrow in Ahmedabad?* or *What's the temperature in Delhi?*"
-        )
-
-    # Simple weather / place queries: deterministic only (no agent wait).
-    if force_fast and _is_simple_weather_query(last_msg, bool(request.farmer_mode)):
+    @app.middleware("http")
+    async def log_requests(request: Request, call_next):
+        start = time.time()
         try:
-            return run_deterministic_telemetry_fallback(
-                location, last_msg, language, lat=request.lat, lon=request.lon
+            response = await call_next(request)
+        except Exception as exc:  # last-resort guard so clients always get JSON
+            duration_ms = round((time.time() - start) * 1000, 2)
+            log_event("ERROR", f"HTTP {request.method} {request.url.path} failed: {exc}",
+                      {"duration_ms": duration_ms, "error": str(exc)})
+            return JSONResponse(
+                status_code=500,
+                content={"detail": "Internal server error", "error": str(exc)},
+                headers={"Access-Control-Allow-Origin": "*"},
             )
-        except Exception as fast_err:
-            print(f"[chat] fast path failed: {fast_err}")
+        if request.url.path not in QUIET_PATHS:
+            log_event(
+                "INFO",
+                f"HTTP {request.method} {request.url.path} -> {response.status_code}",
+                {"duration_ms": round((time.time() - start) * 1000, 2)},
+            )
+        return response
 
-    try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            fut = pool.submit(_agent)
-            return fut.result(timeout=timeout_s)
-    except concurrent.futures.TimeoutError:
-        print("[chat] agent timeout — deterministic fallback")
-        return run_deterministic_telemetry_fallback(
-            location, last_msg, language, lat=request.lat, lon=request.lon
-        )
-    except Exception as exc:
-        print(f"[chat] agent error: {exc}")
-        return run_deterministic_telemetry_fallback(
-            location, last_msg, language, lat=request.lat, lon=request.lon
-        )
+    app.include_router(chat_router.router)
+    app.include_router(mobile_router.router)
+    app.include_router(dev_router.router)
 
-
-@app.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest, http_request: Request):
-    """Shared chat for web app and Flutter app.
-
-    Accepts either:
-    - Web: `{ messages, location, language, farmer_mode, crop }`
-    - Mobile: `{ message, location, lat?, lon?, language, farmer_mode? }`
-    Response is always `{ "response": "<markdown string>" }`.
-    """
-    # Mobile Dio sends Accept-Language; fill language if body left default.
-    if not request.language or request.language in ("English", "en"):
-        hdr = http_request.headers.get("accept-language", "")
-        if hdr:
-            primary = hdr.split(",")[0].strip().split(";")[0].strip()
-            if primary and request.language in ("", "English") and primary.lower() != "en":
-                request.language = primary
-    response = await run_in_threadpool(_run_chat_sync, request)
-    return ChatResponse(response=response)
-
-
-class SandboxRequest(BaseModel):
-    prompt: str
-    location: str = "New Delhi"
-    language: str = "English"
-
-
-@app.post("/dev/sandbox")
-@app.post("/dev/sandbox/")
-async def sandbox_test(request: SandboxRequest):
-    start = time.time()
-    try:
-        response = await run_in_threadpool(
-            run_weather_agent, request.prompt, request.location, request.language
-        )
-        duration_ms = round((time.time() - start) * 1000, 2)
+    @app.get("/", tags=["meta"])
+    async def root():
+        """Service index — confirms the dual-client API surface."""
         return {
-            "status": "success",
-            "duration_ms": duration_ms,
-            "prompt": request.prompt,
-            "location": request.location,
-            "language": request.language,
-            "response": response,
-            "model_used": GROQ_MODEL,
-            "timestamp": datetime.now().isoformat()
+            "service": "WeatherGPT API",
+            "version": API_VERSION,
+            "status": "ok",
+            "clients": {
+                "web": {"repo": "weathergpt",
+                        "endpoints": ["/chat", "/fusion", "/dev", "/dev/sandbox", "/health"]},
+                "mobile": {"repo": "weathergpt-app",
+                           "endpoints": ["/chat", "/weather", "/advisory", "/historical",
+                                         "/comparison", "/fusion", "/health"]},
+            },
+            "fusion_priority": ["Open-Meteo (ECMWF)", "AccuWeather", "WeatherAPI.com",
+                                "Tomorrow.io", "OpenWeatherMap"],
+            "chat_contract": CHAT_CONTRACT,
         }
-    except Exception as exc:
-        duration_ms = round((time.time() - start) * 1000, 2)
-        res = JSONResponse(
-            status_code=500,
-            content={
-                "status": "error",
-                "duration_ms": duration_ms,
-                "error": str(exc),
-                "timestamp": datetime.now().isoformat()
-            }
-        )
-        res.headers["Access-Control-Allow-Origin"] = "*"
-        res.headers["Access-Control-Allow-Methods"] = "*"
-        return res
+
+    log_event("INFO", "Backend server starting up...")
+    return app
 
 
-@app.get("/")
-async def root():
-    """Service index — confirms dual-client API surface."""
-    return {
-        "service": "WeatherGPT API",
-        "status": "ok",
-        "clients": {
-            "web": {
-                "repo": "weathergpt",
-                "endpoints": ["/chat", "/dev", "/dev/sandbox", "/health"],
-            },
-            "mobile": {
-                "repo": "weathergpt-app",
-                "endpoints": [
-                    "/chat",
-                    "/weather",
-                    "/advisory",
-                    "/historical",
-                    "/comparison",
-                    "/health",
-                ],
-            },
-        },
-        "chat_contract": {
-            "request": {
-                "message": "string (mobile single turn)",
-                "messages": "[{role, content}] (web history)",
-                "location": "string",
-                "lat": "number optional (mobile)",
-                "lon": "number optional (mobile)",
-                "language": "English | en | hi | ...",
-                "farmer_mode": "bool",
-                "crop": "string",
-                "client": "web | mobile optional",
-            },
-            "response": {"response": "markdown string"},
-        },
-    }
-
-
-@app.get("/health")
-@app.get("/health/")
-async def health():
-    return {
-        "status": "ok",
-        "clients": ["weathergpt", "weathergpt-app"],
-        "uptime_s": round(time.time() - START_TIME, 1),
-    }
-
-
-@app.get("/dev")
-@app.get("/dev/")
-async def dev_diagnostics():
-    uptime = round(time.time() - START_TIME, 2)
-    if psutil:
-        try:
-            process = psutil.Process(os.getpid())
-            mem_info = process.memory_info()
-            mem_mb = round(mem_info.rss / (1024 * 1024), 2)
-            cpu_pct = process.cpu_percent(interval=None)
-        except Exception:
-            mem_mb, cpu_pct = "N/A", "N/A"
-    else:
-        mem_mb, cpu_pct = "N/A", "N/A"
-
-    endpoints = []
-    try:
-        for route in app.routes:
-            if hasattr(route, "path"):
-                methods = getattr(route, "methods", None)
-                m_str = ",".join(methods) if methods else "GET"
-                endpoints.append(f"{route.path} [{m_str}]")
-    except Exception:
-        endpoints = ["/chat", "/health", "/dev"]
-
-    ai_tools = []
-    try:
-        ai_tools = [getattr(tool, "name", str(tool)) for tool in TOOLS]
-    except Exception:
-        ai_tools = ["geocode_city", "get_current_weather", "get_weather_forecast"]
-
-    keys_status = {
-        "groq_api_key": bool(os.getenv("GROQ_API_KEY")),
-        "weatherapi_key": bool(os.getenv("WEATHERAPI_KEY") or os.getenv("VITE_WEATHERAPI_KEY")),
-        "tomorrow_key": bool(os.getenv("TOMORROW_KEY") or os.getenv("VITE_TOMORROW_KEY")),
-        "openweather_key": bool(os.getenv("OPENWEATHER_KEY") or os.getenv("VITE_OPENWEATHER_KEY")),
-        "accuweather_key": bool(os.getenv("ACCUWEATHER_KEY") or os.getenv("VITE_ACCUWEATHER_KEY")),
-    }
-
-    return {
-        "status": "ok",
-        "timestamp": datetime.now().isoformat(),
-        "server_start_time": START_DATETIME,
-        "uptime_seconds": uptime,
-        "system": {
-            "platform": platform.platform(),
-            "python_version": sys.version.split()[0],
-            "process_pid": os.getpid(),
-            "memory_usage_mb": mem_mb,
-            "cpu_percent": cpu_pct,
-        },
-        "llm_config": {
-            "model": GROQ_MODEL,
-            "has_groq_key": bool(os.getenv("GROQ_API_KEY")),
-        },
-        "provider_keys_status": keys_status,
-        "registered_endpoints": endpoints,
-        "registered_ai_tools": ai_tools,
-        "recent_logs": list(RECENT_LOGS),
-    }
+app = create_app()
 
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8888)

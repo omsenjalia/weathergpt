@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import operator
 from typing import Annotated, Sequence, TypedDict
@@ -43,25 +44,42 @@ class AgentState(TypedDict):
 
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
-# Configure primary LLM and tool-calling model fallbacks for 0% downtime across all Groq models
-primary_llm = ChatGroq(model=GROQ_MODEL, temperature=0, max_retries=2).bind_tools(TOOLS)
-fallback_1 = ChatGroq(model="qwen/qwen3.8-27b", temperature=0, max_retries=2).bind_tools(TOOLS)
-fallback_2 = ChatGroq(model="qwen/qwen3.6-27b", temperature=0, max_retries=2).bind_tools(TOOLS)
-fallback_3 = ChatGroq(model="openai/gpt-oss-20b", temperature=0, max_retries=2).bind_tools(TOOLS)
-fallback_4 = ChatGroq(model="openai/gpt-oss-safeguard-20b", temperature=0, max_retries=2).bind_tools(TOOLS)
+_LLM_CASCADE = [GROQ_MODEL, "qwen/qwen3.8-27b", "qwen/qwen3.6-27b", "openai/gpt-oss-20b", "openai/gpt-oss-safeguard-20b"]
+_TEXT_CASCADE = ["groq/compound", "groq/compound-mini", "allam-2-7b"]
 
-llm = primary_llm.with_fallbacks([fallback_1, fallback_2, fallback_3, fallback_4])
+_llm = None
+_text_llm_chain = None
 
-# Emergency non-tool text generation LLMs (for formatting/translating if tool-calling LLMs hit rate limits)
-text_fallback_1 = ChatGroq(model="groq/compound", temperature=0, max_retries=1)
-text_fallback_2 = ChatGroq(model="groq/compound-mini", temperature=0, max_retries=1)
-text_fallback_3 = ChatGroq(model="allam-2-7b", temperature=0, max_retries=1)
 
-text_llm_chain = text_fallback_1.with_fallbacks([text_fallback_2, text_fallback_3])
+def has_llm() -> bool:
+    return bool(os.getenv("GROQ_API_KEY"))
+
+
+def _get_llm():
+    """Tool-calling LLM cascade, built lazily so the API boots without GROQ_API_KEY
+    (deterministic telemetry path still serves both clients)."""
+    global _llm
+    if _llm is None:
+        if not has_llm():
+            raise RuntimeError("GROQ_API_KEY not configured")
+        models = [ChatGroq(model=m, temperature=0, max_retries=2).bind_tools(TOOLS) for m in _LLM_CASCADE]
+        _llm = models[0].with_fallbacks(models[1:])
+    return _llm
+
+
+def _get_text_llm():
+    """Non-tool text LLMs used only to localise/format deterministic output."""
+    global _text_llm_chain
+    if _text_llm_chain is None:
+        if not has_llm():
+            raise RuntimeError("GROQ_API_KEY not configured")
+        models = [ChatGroq(model=m, temperature=0, max_retries=1) for m in _TEXT_CASCADE]
+        _text_llm_chain = models[0].with_fallbacks(models[1:])
+    return _text_llm_chain
 
 
 def agent_node(state: AgentState):
-    response = llm.invoke(state["messages"])
+    response = _get_llm().invoke(state["messages"])
     return {"messages": [response]}
 
 
@@ -153,11 +171,13 @@ def run_deterministic_telemetry_fallback(
 ) -> str:
     """Zero-error deterministic synthesizer: Fetches live weather directly if all LLMs fail or hit rate limits."""
     try:
-        target_city = smart_extract_city(query, location_str) or (location_str or "New Delhi")
+        default_city = (location_str or "New Delhi").split(",")[0].strip() or "New Delhi"
+        target_city = smart_extract_city(query, location_str) or default_city
         city_name = target_city
-        if lat is not None and lon is not None:
-            # Mobile clients send coordinates — skip fragile geocode when possible.
-            pass
+        query_names_other_city = target_city.strip().lower() != default_city.lower()
+        if lat is not None and lon is not None and not query_names_other_city:
+            # Client supplied coordinates for its own location — trust them, skip geocode.
+            city_name = default_city
         else:
             geo = geocode_city.invoke(target_city)
             if isinstance(geo, dict) and (geo.get("error") or not geo.get("latitude")):
@@ -189,10 +209,10 @@ def run_deterministic_telemetry_fallback(
             fore = get_weather_forecast.invoke({"latitude": float(lat), "longitude": float(lon), "days": 3})
         except Exception as tool_err:
             print(f"[Fallback] get_weather_forecast failed: {tool_err}")
-        if not isinstance(curr, dict) or not curr:
+        if not isinstance(curr, dict) or not curr or curr.get("error"):
             try:
-                import requests as _req
-                om = _req.get(
+                import httpx as _httpx
+                om = _httpx.get(
                     "https://api.open-meteo.com/v1/forecast",
                     params={
                         "latitude": lat,
@@ -205,28 +225,26 @@ def run_deterministic_telemetry_fallback(
                     timeout=12,
                 ).json()
                 cur = om.get("current") or {}
+                from services.open_meteo import code_to_condition as _c2c, extract_weather_code as _ewc
                 curr = {
                     "temperature_2m": cur.get("temperature_2m", 27),
                     "apparent_temperature": cur.get("apparent_temperature", 27),
                     "relative_humidity_2m": cur.get("relative_humidity_2m", 65),
                     "wind_speed_10m": cur.get("wind_speed_10m", 10),
-                    "condition": "Live conditions",
+                    "condition": _c2c(_ewc(cur, 0), "Live conditions"),
                 }
                 daily = om.get("daily") or {}
-                times = daily.get("time") or []
-                highs = daily.get("temperature_2m_max") or []
-                rains = daily.get("precipitation_probability_max") or []
                 fore = {"forecast": [
                     {
-                        "date": times[i] if i < len(times) else f"Day {i+1}",
-                        "max_temp_celsius": highs[i] if i < len(highs) else 30,
-                        "condition": "Forecast",
-                        "rain_probability_percent": rains[i] if i < len(rains) else 20,
+                        "date": d,
+                        "max_temp_celsius": (daily.get("temperature_2m_max") or [None] * 3)[i],
+                        "condition": _c2c((daily.get("weather_code") or [0] * 3)[i], "Clear"),
+                        "rain_probability_percent": (daily.get("precipitation_probability_max") or [0] * 3)[i],
                     }
-                    for i in range(min(3, max(len(times), 1)))
+                    for i, d in enumerate((daily.get("time") or [])[:3])
                 ]}
-            except Exception as http_err:
-                print(f"[Fallback] open-meteo HTTP failed: {http_err}")
+            except Exception as om_err:
+                print(f"[Fallback] Open-Meteo direct fetch failed: {om_err}")
                 curr = {"temperature_2m": 27, "apparent_temperature": 27, "condition": "Unavailable", "relative_humidity_2m": 65, "wind_speed_10m": 10}
                 fore = {"forecast": []}
 
@@ -284,7 +302,7 @@ Provide clean Markdown in {language} script followed by these EXACT widget code 
 ```widget:forecast
 {forecast_widget_json}
 ```"""
-            formatted_res = text_llm_chain.invoke(prompt)
+            formatted_res = _get_text_llm().invoke(prompt)
             if formatted_res and formatted_res.content and len(formatted_res.content) > 30:
                 return formatted_res.content
         except Exception as text_err:
@@ -409,6 +427,10 @@ FORMATTING & RICH WIDGET RULES:
             formatted_messages.append(HumanMessage(content=content))
         elif role == "assistant":
             formatted_messages.append(AIMessage(content=content))
+
+    if not has_llm():
+        print("[Agent] GROQ_API_KEY missing — serving deterministic telemetry response")
+        return run_deterministic_telemetry_fallback(clean_location, last_user_msg, language)
 
     try:
         result = _app.invoke({"messages": formatted_messages})

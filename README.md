@@ -14,7 +14,7 @@
 
 ## 🌟 Key Features
 
-- **Multi-Source Ensemble Fusion Engine** — Fuses telemetry in real-time across 5 meteorological providers (**Open-Meteo ECMWF/IMD standard model**, **WeatherAPI.com**, **Tomorrow.io**, **OpenWeatherMap**, **AccuWeather**) for high-precision weather metrics.
+- **Multi-Source Ensemble Fusion Engine** — Fuses telemetry in real-time across 5 meteorological providers with priority **Open-Meteo (ECMWF/IMD, 2.0×) > AccuWeather (1.5×) > WeatherAPI.com / Tomorrow.io (1.2×) > OpenWeatherMap (1.1×)**. The engine runs server-side (`backend/services/fusion.py`) and is shared by the web app and the Android app (`omsenjalia/weathergpt-app`).
 - **Conversational AI Agent (LangGraph)** — Stateful ReAct agent powered by **`openai/gpt-oss-120b`** and an **8-model Groq LLM cascade** (`gpt-oss-120b` → `qwen3.8-27b` → `qwen3.6-27b` → `gpt-oss-20b` → `gpt-oss-safeguard-20b` → `groq/compound` → `groq/compound-mini` → `allam-2-7b`) with smart Indic postposition city extraction (`kolkata ma`, `mumbai me`, `delhi nu`) and deterministic telemetry fallback for 0% downtime.
 - **10 Indian Languages i18n Engine** — Full native script UI rendering and browser Web Speech API (TTS & STT) support for Hindi, Gujarati, Marathi, Tamil, Telugu, Bengali, Kannada, Malayalam, Punjabi, and English.
 - **Agricultural Farmer Advisory Mode** — Crop-specific guidance (Wheat, Cotton, Rice, Sugarcane, Groundnut, Mustard, Vegetables) covering irrigation timing, pesticide spraying windows, thermal/frost stress, and harvest safety.
@@ -34,7 +34,7 @@ For complete technical specifications, data flows, API contracts, and SIH compli
 
 ## 🌐 Multi-Source Weather Providers & API Key Guide
 
-WeatherGPT automatically blends active providers to compute weighted mean temperature, humidity, pressure, and wind speed.
+WeatherGPT automatically blends active providers (queried in parallel, outliers > 7 °C from the Open-Meteo baseline excluded) to compute weighted mean temperature, humidity, pressure, and wind speed. Inspect it live at `GET /fusion?lat=&lon=`.
 
 | Provider | Environment Variable (Frontend / Backend) | Grid Resolution | Setup Guide |
 | :--- | :--- | :--- | :--- |

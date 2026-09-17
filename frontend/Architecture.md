@@ -15,12 +15,12 @@
 | [3. Tech Stack & Design](#3-technology-stack--design-system) | Frameworks, tools & design system tokens | ✅ Live | Vite, TailwindCSS, Groq, Framer Motion |
 | [4. Repository Structure](#4-repository-structure) | File footprint & codebase organization | ✅ Live | 34 modular components/views/utils |
 | [5. Environment Config](#5-environment-variables--secrets) | Configuration & key fallback management | ✅ Live | `.env`, dotenv, Vite runtime env |
-| [6. Backend Architecture](#6-backend-architecture) | Async FastAPI server & middleware | ✅ Live | FastAPI, Uvicorn, Pydantic |
+| [6. Backend Architecture](#6-backend-architecture) | Dual-client FastAPI server (web + Android) & middleware | ✅ Live | FastAPI, Uvicorn, Pydantic, modular routers/services |
 | [7. Frontend Architecture](#7-frontend-architecture) | React SPA views, state & components | ✅ Live | React 19, Lucide, Excalidraw, Leaflet |
 | [8. Data Flow Lifecycle](#8-data-flow--request-lifecycle) | Request execution & payload routing | ✅ Live | Async REST, JSON Widgets |
 | [9. AI Agent Engine](#9-ai-agent-architecture-langgraph) | LangGraph state machine & 5-model cascade | ✅ Live | Qwen 27B, Llama 3.1, Mixtral, Gemma 2 |
-| [10. Ensemble Fusion](#10-multi-source-ensemble-fusion-engine) | Multi-provider weighted weather aggregation | ✅ Live | Open-Meteo (ECMWF/IMD standard), WeatherAPI, OWM |
-| [11. API Reference](#11-api-contract-reference) | REST endpoints specification | ✅ Live | `/chat`, `/dev`, `/dev/sandbox`, `/health` |
+| [10. Ensemble Fusion](#10-multi-source-ensemble-fusion-engine) | Server-side + client-side weighted fusion (Open-Meteo > AccuWeather > others) | ✅ Live | Open-Meteo (ECMWF/IMD), AccuWeather, WeatherAPI, Tomorrow.io, OWM |
+| [11. API Reference](#11-api-contract-reference) | Shared REST contract for web & mobile | ✅ Live | `/chat`, `/weather`, `/fusion`, `/advisory`, `/historical`, `/comparison`, `/dev`, `/health` |
 | [12. Widget Protocol](#12-widget-protocol-chat-embed) | Dynamic JSON chat card renderer | ✅ Live | `widget:weather`, `widget:forecast`, `widget:alert` |
 | [13. Multilingual Engine](#13-internationalization-i18n) | 10 Indian regional languages + Web Speech | ✅ Live | Native scripts, Web Speech TTS/STT, langdetect |
 | [14. Risk Outlook Engine](#14-risk-assessment-engine) | 5-day hazard classification engine | ✅ Live | 3-tier severity scoring (RED/YELLOW/GREEN) |
@@ -28,7 +28,7 @@
 | [16. Dev Suite](#16-developer-diagnostics-dashboard) | 9-tab diagnostics & hazard simulator | ✅ Live | Latency tracking, stress testing, AI sandbox |
 | [17. Deployment Setup](#17-deployment-architecture) | Production cloud infrastructure | ✅ Live | Vercel SPA CDN + Vercel Python Serverless |
 | [18. SIH Compliance](#18-problem-statement--sih-compliance-matrix) | Problem statement compliance & 10 use cases | ✅ Live | Full matrix & evaluation criteria mapping |
-| [19. Future Roadmap](#19-future-roadmap--planned-enhancements) | Planned direct IMD API portal & IoT feeds | 🚀 Roadmap | Direct IMD REST API key integration, Radar, PWA |
+| [19. Future Roadmap](#19-future-roadmap--planned-enhancements) | Planned direct IMD API portal & IoT feeds | 🚀 Roadmap | Direct IMD REST API key integration, Radar, PWA, iOS build |
 
 ---
 
@@ -42,7 +42,8 @@
 ### Core Innovations & Key Differentiators
 - **Conversational AI Agent**: Driven by a stateful **LangGraph** orchestration graph and an **8-model Groq LLM cascade** (`openai/gpt-oss-120b` → `qwen3.8-27b` → `qwen3.6-27b` → `gpt-oss-20b` → `gpt-oss-safeguard-20b` → `groq/compound` → `groq/compound-mini` → `allam-2-7b`) with smart Indic city extraction (`kolkata ma`, `mumbai me`, `delhi nu`) and 0ms deterministic telemetry fallback for zero downtime.
 - **14 Specialized Telemetry Tools**: Dynamic tool execution covering current weather, 7-day forecast, 24-48h hourly trends, US AQI pollutants, solar UV radiation, barometric pressure, soil moisture/agromet telemetry, and geocoding.
-- **Multi-Source Ensemble Engine**: Parallel data ingestion across up to 5 weather providers with weighted algorithm calculation. Open-Meteo (ECMWF/IMD standard NWP model) is assigned **Priority-1 trust weighting (3.0×)**.
+- **Multi-Source Ensemble Engine (server + client)**: Parallel data ingestion across up to 5 weather providers with a weighted, outlier-guarded fusion algorithm. Priority order is **Open-Meteo (ECMWF/IMD NWP, 2.0×) > AccuWeather (1.5×) > WeatherAPI / Tomorrow.io (1.2×) > OpenWeatherMap (1.1×)**. The same engine (`backend/services/fusion.py`) feeds the web chat, the AI agent tools and the Android app's home screen, so every client sees identical numbers.
+- **One Backend, Two Clients**: A single FastAPI deployment serves the React web app (`weathergpt`) and the Flutter Android app (`weathergpt-app`) simultaneously — shared `POST /chat` contract with client auto-detection, ISO/name language normalisation, and mobile-only `GET /weather`, `/advisory`, `/historical`, `/comparison` routes.
 - **Agricultural Farmer Advisory Mode**: Crop-specific advisories for 8 major crop types with irrigation, pesticide spraying, thermal/frost stress, and harvest window guidance.
 - **10 Regional Indian Languages**: Native script rendering for Hindi, Gujarati, Marathi, Tamil, Telugu, Bengali, Kannada, Malayalam, Punjabi, and English, coupled with browser Web Speech API Voice Text-to-Speech and Speech-to-Text.
 - **Rich Interactive Widgets**: Automated parsing of markdown widget tags (`widget:weather`, `widget:forecast`, `widget:alert`) into interactive React UI components.
@@ -54,28 +55,34 @@
 
 ```mermaid
 graph TB
-    subgraph "User Interface (Client Side)"
-        UI["React 19 SPA<br/>(Vite + TailwindCSS)"]
-        EE["Ensemble Engine<br/>(Client-Side Fusion)"]
+    subgraph "Clients"
+        UI["React 19 Web SPA<br/>(weathergpt — Vite + TailwindCSS)"]
+        APP["Flutter Android App<br/>(weathergpt-app — Riverpod + Dio)"]
+        EE["Ensemble Engine<br/>(Client-Side Fusion mirror)"]
         LOC["Location Services<br/>(GPS / IP / Reverse Geocode)"]
         TTS["Speech Engine<br/>(Web Speech API TTS/STT)"]
         I18N["i18n Engine<br/>(10 Native Languages)"]
     end
 
-    subgraph "FastAPI Server Infrastructure"
-        API["FastAPI App<br/>(Python 3.12 Serverless / Uvicorn)"]
+    subgraph "FastAPI Server Infrastructure (shared by both clients)"
+        API["FastAPI App<br/>(main.py app factory — CORS, logging)"]
+        RCHAT["routers/chat<br/>POST /chat"]
+        RMOB["routers/mobile<br/>GET /weather /advisory /historical /comparison"]
+        RDEV["routers/dev<br/>GET /health /dev /fusion · POST /dev/sandbox"]
+        CHATSVC["services/chat<br/>(client detect · lang normalise · path router)"]
+        FUSION["services/fusion<br/>(Server-Side Ensemble Engine)"]
         AGT["LangGraph Agent<br/>(State Machine Router)"]
-        LLM["Groq Multi-Model Cascade<br/>(Qwen 27B → Llama 8B → Llama 70B → Mixtral → Gemma 2)"]
-        TOOLS["14 Telemetry AI Tools<br/>(Geocode, Weather, Forecast, AQI, UV, Soil, Alerts)"]
+        LLM["Groq Multi-Model Cascade<br/>(gpt-oss-120b → qwen3.8-27b → … → allam-2-7b)"]
+        TOOLS["9 Telemetry AI Tools<br/>(Geocode, Weather, Forecast, AQI, UV, Soil, Alerts)"]
         FB["Deterministic Telemetry Synthesizer<br/>(0% Downtime Fallback)"]
     end
 
     subgraph "Live External Telemetry APIs"
-        OM["Open-Meteo Weather<br/>(ECMWF/IMD Standard — Weight 3.0×)"]
-        WA["WeatherAPI.com<br/>(Weight 1.2×)"]
-        TM["Tomorrow.io<br/>(Weight 1.2×)"]
-        OWM["OpenWeatherMap<br/>(Weight 1.1×)"]
-        AW["AccuWeather<br/>(Weight 1.25×)"]
+        OM["Open-Meteo Weather<br/>(ECMWF/IMD Standard — Priority 1 · 2.0×)"]
+        AW["AccuWeather<br/>(Priority 2 · 1.5×)"]
+        WA["WeatherAPI.com<br/>(1.2×)"]
+        TM["Tomorrow.io<br/>(1.2×)"]
+        OWM["OpenWeatherMap<br/>(1.1×)"]
         AQ["Open-Meteo Air Quality<br/>(AQI, PM2.5, PM10, Gases)"]
     end
 
@@ -84,21 +91,31 @@ graph TB
         WDY["Windy GIS Map Engine<br/>(Interactive Map Embed)"]
     end
 
-    UI -->|"POST /chat"| API
-    UI -->|"GET /dev"| API
-    UI -->|"POST /dev/sandbox"| API
-    UI -->|"GET /health"| API
+    UI -->|"POST /chat · GET /fusion /dev"| API
+    APP -->|"POST /chat · GET /weather /advisory /historical"| API
 
-    API --> AGT
+    API --> RCHAT
+    API --> RMOB
+    API --> RDEV
+    RCHAT --> CHATSVC
+    CHATSVC -->|"simple query"| FB
+    CHATSVC -->|"complex / farmer"| AGT
     AGT --> LLM
     AGT --> TOOLS
-    AGT -->|"If LLM Limit Hit"| FB
+    AGT -->|"timeout / limit"| FB
+    RMOB --> FUSION
+    RDEV --> FUSION
+    TOOLS --> FUSION
+    FB --> FUSION
 
-    TOOLS --> OM
-    TOOLS --> WA
-    TOOLS --> OWM
+    FUSION --> OM
+    FUSION --> AW
+    FUSION --> WA
+    FUSION --> TM
+    FUSION --> OWM
+    RMOB --> OM
+    RMOB --> AQ
     TOOLS --> CAP
-    FB --> OM
 
     EE --> OM
     EE --> WA
@@ -196,12 +213,29 @@ weathergpt/
 │   │       ├── location.js             # GPS / IP / Reverse geocoding module
 │   │       ├── speechEngine.js         # Web Speech API wrapper
 │   │       └── translations.js         # 10-Language i18n translation dictionary
-└── backend/                            # FastAPI AI Agent Server
-    ├── main.py                         # FastAPI routes & logging middleware
-    ├── agent.py                        # LangGraph state machine & LLM cascade
-    ├── tools.py                        # 14 Specialized AI telemetry tools
-    ├── imd_service.py                  # Public CAP alert feed & sample schemas
+└── backend/                            # FastAPI server shared by web + Android
+    ├── main.py                         # App factory: CORS, logging middleware, router mounting
+    ├── schemas.py                      # Pydantic contracts (ChatRequest accepts web + mobile shapes)
+    ├── state.py                        # Uptime + in-memory recent-log ring buffer
+    ├── agent.py                        # LangGraph state machine & lazy Groq LLM cascade
+    ├── tools.py                        # 9 Specialized AI telemetry tools (@tool)
+    ├── mobile_api.py                   # Back-compat shim → routers/mobile.py
+    ├── api/index.py                    # Vercel serverless entry (re-exports `app`)
+    ├── services/
+    │   ├── open_meteo.py               # Baseline provider client, WMO code table, geocode
+    │   ├── fusion.py                   # Server-side ensemble engine (parallel, weighted, outlier-guarded)
+    │   └── chat.py                     # Chat routing policy: client detect, language normalise, fast/agent/fallback
+    ├── routers/
+    │   ├── chat.py                     # POST /chat (web + mobile)
+    │   ├── mobile.py                   # GET /weather /advisory /historical /comparison (Flutter)
+    │   └── dev.py                      # GET /health /dev /fusion, POST /dev/sandbox
+    ├── tests/                          # pytest: API contract, fusion maths, chat policy (offline)
     └── requirements.txt                # Python backend dependencies
+
+# Companion repository: omsenjalia/weathergpt-app (Flutter Android client)
+#   lib/core/services/api_client.dart   → Dio, BACKEND_URL, Accept-Language header
+#   lib/features/home/…/weather_provider.dart → GET /weather
+#   lib/features/chat/…/chat_provider.dart    → POST /chat (message + messages + lat/lon)
 ```
 
 ---
@@ -235,22 +269,68 @@ weathergpt/
 
 ## 6. Backend Architecture
 
+One FastAPI deployment serves **both** clients. The web SPA (`weathergpt`) and the Flutter Android app (`weathergpt-app`) point at the same base URL (`VITE_API_URL` / `BACKEND_URL`) and share the `/chat` contract; mobile-specific screens use additional read-only routes.
+
 ### 6.1 Server Endpoints
 
-| Path | Method | Functionality | Auth | Response |
+| Path | Method | Used by | Functionality | Response |
 | :--- | :--- | :--- | :--- | :--- |
-| `/chat` | `POST` | Core AI conversation endpoint (invokes LangGraph agent) | Open (CORS `*`) | `ChatResponse` JSON |
-| `/health` | `GET` | Instant health check | Open | `{"status": "ok"}` |
-| `/dev` | `GET` | Returns 9-category system diagnostics & logs | Open | Comprehensive JSON |
-| `/dev/sandbox` | `POST` | Direct single-prompt testing with latency profiling | Open | Sandbox result JSON |
+| `/chat` | `POST` | Web + Android | Shared conversational endpoint (fast path → agent → deterministic fallback) | `{ response, meta }` |
+| `/weather` | `GET` | Android | Home screen snapshot: fused current conditions + hourly + 3-day outlook + AQI/UV/sun | Snapshot JSON |
+| `/advisory` | `GET` | Android (farmer persona) | Day-by-day field-work suitability windows | `{ summary, windows[] }` |
+| `/historical` | `GET` | Android (researcher) | Yearly rainfall / temperature / humidity series (Open-Meteo archive) | `{ metric, points[] }` |
+| `/comparison` | `GET` | Android (researcher) | Same metric across several named locations | `{ metric, locations[] }` |
+| `/fusion` | `GET` | Web Dev Suite + Android | Server-side ensemble inspector: per-provider readings, weights, outliers, fused result | Fusion JSON |
+| `/health` | `GET` | Both / uptime probes | Liveness | `{ status, clients, uptime_s }` |
+| `/dev` | `GET` | Web Dev Suite | System diagnostics, key status, fusion weights, recent logs | Diagnostics JSON |
+| `/dev/sandbox` | `POST` | Web Dev Suite | Direct single-prompt agent test with latency profiling | Sandbox JSON |
+| `/` | `GET` | Both | Service index listing per-client endpoint surface and the chat contract | Index JSON |
 
-### 6.2 Middleware & Request Logging
+### 6.2 Module Layout
+
+| Layer | Module | Responsibility |
+| :--- | :--- | :--- |
+| App | `main.py` | `create_app()` — CORS (`*`), request-logging middleware, mounts routers, `/` index |
+| Contracts | `schemas.py` | `ChatRequest` accepts the web shape (`messages`, language *name*) **and** the mobile shape (`message`, `lat`/`lon`, ISO code); unknown fields ignored |
+| Routing policy | `services/chat.py` | Detects client (body hint → lat/lon → User-Agent), normalises `hi`/`gu-IN`/`Hindi` → canonical name, honours `Accept-Language`, routes greeting / simple / complex queries |
+| Fusion | `services/fusion.py` | Parallel provider fan-out, weighted per-metric mean, outlier guard, confidence score (§10) |
+| Baseline provider | `services/open_meteo.py` | Single WMO code table, typed `UpstreamError` (502/504), geocoding |
+| Agent | `agent.py`, `tools.py` | LangGraph ReAct loop; LLM clients are created **lazily** so the API boots and serves telemetry even without `GROQ_API_KEY` |
+
+### 6.3 Chat Request Lifecycle (both clients)
+
+```mermaid
+sequenceDiagram
+    participant C as Client (Web or Android)
+    participant R as routers/chat
+    participant S as services/chat
+    participant F as services/fusion
+    participant A as LangGraph Agent
+
+    C->>R: POST /chat {message | messages, location, lat?, lon?, language}
+    R->>S: detect_client + normalise language (+ Accept-Language)
+    alt greeting / meta
+        S-->>C: canned intro (no upstream calls)
+    else simple weather question
+        S->>F: fuse_current_weather(lat, lon)  [city in query overrides device coords]
+        F-->>S: fused reading + providers_used
+        S-->>C: Markdown + widget:weather / widget:forecast
+    else complex / farmer mode
+        S->>A: run_weather_agent (22 s budget)
+        A->>F: get_current_weather tool
+        A-->>S: Markdown + widgets
+        S-->>C: response
+        Note over S: timeout / error / no key → deterministic fallback via F
+    end
+```
+
+### 6.4 Middleware & Request Logging
 
 Every request passing through FastAPI is profiled by custom logging middleware:
 1. Records request start timestamp.
-2. Injects CORS headers allowing multi-origin SPA access.
+2. CORS (`*`) is handled by Starlette's `CORSMiddleware`, so preflights from the Vercel SPA and requests from the Android app (no Origin header) both succeed.
 3. Computes execution duration in milliseconds.
-4. Appends non-sensitive logs to an in-memory ring buffer (`RECENT_LOGS`, max 50 entries) exposed via `/dev`.
+4. Appends non-sensitive logs to an in-memory ring buffer (`RECENT_LOGS`, max 50 entries) exposed via `/dev`; unhandled exceptions are converted to a JSON `500` so clients never receive an HTML error page.
 
 ---
 
@@ -372,31 +452,43 @@ graph TD
 
 ### 10.1 Telemetry Providers & Priority Weighting
 
-WeatherGPT fuses data across 5 distinct meteorological sources. **Open-Meteo (ECMWF/IMD global standard model)** is weighted highest to reflect government-grade accuracy over the Indian subcontinent:
+WeatherGPT fuses data across 5 distinct meteorological sources. The priority order is **Open-Meteo > AccuWeather > all other providers**. Open-Meteo (ECMWF/IMD global standard NWP model) is the always-on, key-less baseline; AccuWeather is the second most trusted vendor; the remaining providers refine the mean when their keys are configured.
 
-| Provider | Trust Weight | Coverage | Provided Metrics |
-| :--- | :--- | :--- | :--- |
-| **Open-Meteo (ECMWF/IMD Standard)** | **3.0× (Priority 1)** | Global / India | Temp, feels like, humidity, wind, pressure, UV, hourly, daily |
-| **WeatherAPI.com** | **1.2×** | Global / India | Temp, feels like, humidity, wind, AQI, PM2.5, PM10 |
-| **Tomorrow.io** | **1.2×** | Global | Temp, feels like, humidity, wind speed, surface pressure |
-| **AccuWeather** | **1.25×** | Global | Temp, RealFeel, humidity, wind, UV index |
-| **OpenWeatherMap** | **1.1×** | Global | Temp, feels like, humidity, wind speed, conditions |
+| Priority | Provider | Trust Weight | Key | Coverage | Provided Metrics |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **1** | **Open-Meteo (ECMWF/IMD Standard)** | **2.0×** | none (always on) | Global / India | Temp, feels like, humidity, wind, pressure, UV, WMO code, hourly, daily |
+| **2** | **AccuWeather** | **1.5×** | `ACCUWEATHER_KEY` | Global | Temp, RealFeel, humidity, wind, pressure, UV, condition text |
+| 3 | WeatherAPI.com | 1.2× | `WEATHERAPI_KEY` | Global / India | Temp, feels like, humidity, wind, pressure, UV, AQI, PM2.5, PM10 |
+| 3 | Tomorrow.io | 1.2× | `TOMORROW_KEY` | Global | Temp, feels like, humidity, wind speed, surface pressure, UV |
+| 4 | OpenWeatherMap | 1.1× | `OPENWEATHER_KEY` | Global | Temp, feels like, humidity, wind speed, pressure, conditions |
 
-### 10.2 Mathematical Fusion Formula
+The weights are defined once in `backend/services/fusion.py::PROVIDER_WEIGHTS` and mirrored in `frontend/src/utils/ensembleEngine.js::PROVIDER_WEIGHTS`. The server engine is authoritative: it powers `GET /weather` (Android home screen), `GET /fusion` (Dev Suite Ensemble Inspector), the agent's `get_current_weather` tool and the deterministic chat fallback. The client-side engine remains for the web dashboard's direct-fetch path and applies the identical algorithm.
 
-For any continuous weather metric $M$ (e.g., Temperature, Humidity, Pressure):
+### 10.2 Fusion Algorithm
 
-$$\text{Fused Metric } M = \frac{\sum_{i=1}^{N} (M_i \times W_i)}{\sum_{i=1}^{N} W_i}$$
+1. **Parallel fan-out** — every configured provider is queried concurrently with a hard per-provider timeout (`FUSION_PROVIDER_TIMEOUT`, default 6 s); a slow vendor can never stall a chat request. When the caller already holds an Open-Meteo `current` block (mobile `/weather`), it is injected to avoid a duplicate request.
+2. **Outlier guard** — with Open-Meteo present, any provider whose temperature deviates by more than `FUSION_OUTLIER_DELTA_C` (default 7 °C) from the baseline is excluded from the mean but still reported with `outlier: true`.
+3. **Per-metric weighted mean** — computed only over providers that actually reported the metric (missing humidity is never substituted with a default).
+4. **Categorical fields** — WMO `weathercode` / `condition` are taken from the highest-weighted provider that supplied them (Open-Meteo whenever available).
+5. **Confidence** — derived from the temperature spread among accepted providers: `high` ≤ 1.5 °C, `medium` ≤ 3.5 °C, `low` otherwise, `single-source` when only one provider answered.
 
-Where $M_i$ is the value reported by provider $i$, and $W_i$ is the designated trust weight of provider $i$.
+### 10.3 Mathematical Fusion Formula
+
+For any continuous weather metric $M$ (e.g., Temperature, Humidity, Pressure), over the set $P_M$ of non-outlier providers that reported $M$:
+
+$$\text{Fused Metric } M = \frac{\sum_{i \in P_M} (M_i \times W_i)}{\sum_{i \in P_M} W_i}, \qquad W = \{\text{Open-Meteo}: 2.0,\ \text{AccuWeather}: 1.5,\ \text{WeatherAPI}: 1.2,\ \text{Tomorrow.io}: 1.2,\ \text{OWM}: 1.1\}$$
+
+Where $M_i$ is the value reported by provider $i$, and $W_i$ is its designated trust weight. Example: Open-Meteo 30.0 °C and AccuWeather 32.0 °C fuse to $(30·2.0 + 32·1.5)/3.5 = 30.9$ °C.
 
 ---
 
 ## 11. API Contract Reference
 
+The contract below is shared with the Android app (`weathergpt-app/docs/web_app_api_contract.md`).
+
 ### `POST /chat`
 
-**Request Payload**:
+**Request Payload (web)**:
 ```json
 {
   "messages": [
@@ -405,16 +497,63 @@ Where $M_i$ is the value reported by provider $i$, and $W_i$ is the designated t
   "location": "Ahmedabad, Gujarat, India",
   "language": "English",
   "farmer_mode": false,
+  "crop": "",
+  "client": "web"
+}
+```
+
+**Request Payload (Android)** — same endpoint; the Flutter client adds device coordinates, may send a single `message`, and uses ISO language codes (also sent as `Accept-Language`):
+```json
+{
+  "message": "weather in pune",
+  "messages": [{"role": "user", "content": "weather in pune"}],
+  "location": "Ahmedabad, Gujarat",
+  "lat": 23.02,
+  "lon": 72.57,
+  "language": "hi",
+  "farmer_mode": false,
   "crop": ""
 }
 ```
+When the question names a different city than the device location, the named city wins; otherwise `lat`/`lon` are used directly and geocoding is skipped.
 
 **Response Payload**:
 ```json
 {
-  "response": "## Weather Outlook for Ahmedabad\n\n```widget:weather\n{\n  \"city\": \"Ahmedabad\",\n  \"temp\": 34,\n  \"feelsLike\": 38,\n  \"condition\": \"Partly Cloudy\",\n  \"humidity\": 65,\n  \"windSpeed\": 14,\n  \"advisory\": \"Warm afternoon conditions with moderate humidity.\"\n}\n```\n\nRain is unlikely over the next 24 hours."
+  "response": "## Weather Outlook for Ahmedabad\n\n```widget:weather\n{\n  \"city\": \"Ahmedabad\",\n  \"temp\": 34,\n  \"feelsLike\": 38,\n  \"condition\": \"Partly Cloudy\",\n  \"humidity\": 65,\n  \"windSpeed\": 14,\n  \"advisory\": \"Warm afternoon conditions with moderate humidity.\"\n}\n```\n\nRain is unlikely over the next 24 hours.",
+  "meta": {"path": "fast", "client": "web", "language": "English", "location": "Ahmedabad, Gujarat, India"}
 }
 ```
+`meta.path` is one of `greeting | fast | agent | fallback`. `meta` is additive — older clients that only read `response` keep working.
+
+### `GET /weather?lat=&lon=&language=` (Android home screen)
+
+```json
+{
+  "temperature_c": 31.5, "feels_like_c": 35.4, "condition": "Partly cloudy", "weather_code": 2,
+  "high_c": 33, "low_c": 26, "rain_probability": 20, "wind_kmh": 13.1, "wind_direction": 240,
+  "humidity": 66, "pressure_hpa": 1004.5, "precipitation_mm": 0.0, "uv_index": 8.1,
+  "sunrise": "2026-09-17T06:25", "sunset": "2026-09-17T18:45", "aqi": 42, "pm2_5": 18.3,
+  "hourly": [{"time": "2026-09-17T00:00", "temperature_c": 29, "rain_probability": 10}],
+  "forecast": [{"date": "2026-09-17", "high_c": 33, "low_c": 26, "rain_probability": 20, "rain_mm": 0, "condition": "Partly cloudy"}],
+  "source": "multi-provider-fusion",
+  "providers_used": ["Open-Meteo (ECMWF)", "AccuWeather"],
+  "fusion": {"confidence": "high", "temp_spread_c": 0.8, "weights": {"Open-Meteo (ECMWF)": 2.0, "AccuWeather": 1.5}},
+  "fetched_at": "2026-09-17T07:10:00Z"
+}
+```
+
+### `GET /fusion?lat=&lon=` (Ensemble Inspector — web Dev Suite & Android)
+
+Returns the fused reading plus `providers[]` (each with `weight`, per-metric values and `outlier` flag), `weights`, `confidence`, `temp_spread_c`, `priority` and `configured_providers`.
+
+### `GET /advisory`, `GET /historical`, `GET /comparison` (Android personas)
+
+| Route | Query | Notes |
+| :--- | :--- | :--- |
+| `/advisory` | `lat, lon, crop?, days=3` | `windows[]` with `suitability: good | caution | poor`, `best_window`, rain / wind / heat drivers |
+| `/historical` | `lat, lon, metric=rainfall|temperature|humidity, start_year, end_year` | Yearly aggregates (sum for rainfall, mean otherwise), max 40-year span |
+| `/comparison` | `locations=name,lat,lon;…, metric, start_year, end_year` | Runs `/historical` per location |
 
 ---
 
@@ -511,14 +650,17 @@ graph TB
 
     subgraph "External Cloud Infrastructure"
         GROQ["Groq Cloud LPUs<br/>(LLM Inference)"]
-        MET["Weather Data Providers<br/>(Open-Meteo, WeatherAPI, OWM)"]
+        MET["Weather Data Providers<br/>(Open-Meteo → AccuWeather → WeatherAPI, Tomorrow.io, OWM)"]
     end
 
     USER["User Web Browser"] -->|"HTTPS GET /"| CDN
-    USER -->|"HTTPS POST /chat"| SLS
+    USER -->|"HTTPS POST /chat · GET /fusion"| SLS
+    PHONE["Android App (Flutter)"] -->|"HTTPS POST /chat · GET /weather /advisory /historical"| SLS
     SLS --> GROQ
     SLS --> MET
 ```
+
+Both clients target the same serverless deployment: the web SPA via `VITE_API_URL`, the Android app via `BACKEND_URL` in its `.env` (emulator default `http://10.0.2.2:8888`). Vendor weather keys live only on the server; the Android app never embeds them.
 
 ---
 
@@ -530,7 +672,7 @@ graph TB
 | :--- | :--- | :--- | :--- |
 | **1. Real-time Telemetry** | Real-time weather data retrieval | ✅ **Fully Implemented** — Fuses live weather telemetry (temp, feels-like, humidity, wind, pressure, UV, AQI) from up to 5 providers. | [`ensembleEngine.js`](file:///home/om/sih/frontend/src/utils/ensembleEngine.js)<br/>[`tools.py`](file:///home/om/sih/backend/tools.py) |
 | **2. Natural Language Querying** | Conversational weather forecasting | ✅ **Fully Implemented** — LangGraph state machine powered by Groq Qwen 27B LLM with automated tool invocation. | [`agent.py`](file:///home/om/sih/backend/agent.py)<br/>[`WeatherChatView.jsx`](file:///home/om/sih/frontend/src/views/WeatherChatView.jsx) |
-| **3. NWP Model Integration** | Integration with GFS/ECMWF models | ✅ **Fully Implemented** — ECMWF/IMD model data given **Priority-1 trust weight (3.0×)** + Windy GIS map support for GFS/ECMWF. | [`ensembleEngine.js`](file:///home/om/sih/frontend/src/utils/ensembleEngine.js)<br/>[`MapView.jsx`](file:///home/om/sih/frontend/src/views/MapView.jsx) |
+| **3. NWP Model Integration** | Integration with GFS/ECMWF models | ✅ **Fully Implemented** — ECMWF/IMD model data given **Priority-1 trust weight (2.0×, above AccuWeather 1.5×)** + Windy GIS map support for GFS/ECMWF. | [`ensembleEngine.js`](file:///home/om/sih/frontend/src/utils/ensembleEngine.js)<br/>[`MapView.jsx`](file:///home/om/sih/frontend/src/views/MapView.jsx) |
 | **4. Extreme Weather Warnings** | Early alert dissemination | ✅ **Fully Implemented** — Official alert widget (`widget:alert`), 5-day risk assessment engine, and public CAP warning stream integration. | [`RiskOutlookCard.jsx`](file:///home/om/sih/frontend/src/components/RiskOutlookCard.jsx)<br/>[`imd_service.py`](file:///home/om/sih/backend/imd_service.py) |
 | **5. Location-Based Advisories**| Location forecasting & advisory | ✅ **Fully Implemented** — GPS auto-location + IP fallback + Agricultural Farmer Mode for crop-specific advisory generation. | [`location.js`](file:///home/om/sih/frontend/src/utils/location.js)<br/>[`agent.py`](file:///home/om/sih/backend/agent.py) |
 | **6. Multilingual Support** | Multilingual support for Indian languages | ✅ **Fully Implemented** — **10 Indian languages** in native scripts (Hindi, Gujarati, Marathi, Tamil, etc.) + `langdetect`. | [`translations.js`](file:///home/om/sih/frontend/src/utils/translations.js)<br/>[`agent.py`](file:///home/om/sih/backend/agent.py) |
@@ -569,7 +711,7 @@ graph LR
     end
 
     subgraph "Phase 3 Roadmap (2027)"
-        R4["📱 Flutter Android & iOS Native App<br/>(Cross-platform mobile client with push alerts)"]
+        R4["📱 Flutter iOS build + push alerts<br/>(Android client already live on shared backend)"]
         R5["🎙️ Voice-First AI Assistant<br/>(Hands-free wake-word & full-duplex speech)"]
         R6["IoT Hardware Sensor Mesh<br/>(LoRaWAN Field Weather Station Data)"]
     end
@@ -597,8 +739,8 @@ graph LR
 - **Overview**: Ingesting real-time field telemetry from low-cost LoRaWAN hardware weather stations deployed at Krishi Vigyan Kendras (KVKs) to ground-truth satellite weather models with localized soil moisture and leaf wetness readings.
 
 ### 19.5 Cross-Platform Android & iOS Mobile Application (Flutter)
-- **Status**: [🚀 Planned — Mobile Application Roadmap]
-- **Overview**: Developing a high-performance, cross-platform native mobile application built with **Flutter** (Dart) for Android and iOS devices. The mobile app will feature native push notification integration for real-time IMD severe weather alerts, background GPS location tracking, offline cached weather cards, and native device hardware speech integration.
+- **Status**: [✅ Android Live (`omsenjalia/weathergpt-app`) — 🚀 iOS build, push alerts & offline cache planned]
+- **Overview**: The Flutter (Dart) Android client is live and served by the **same FastAPI backend** as the web app (see §6). It consumes `POST /chat`, `GET /weather`, `/advisory`, `/historical` and `/comparison`, with persona modes (citizen / farmer / researcher) and multilingual chat via `Accept-Language`. Remaining roadmap items: iOS build, native push notifications for IMD severe weather alerts, background GPS tracking, offline cached weather cards, and on-device speech.
 
 ### 19.6 Voice-First Conversational AI Assistant
 - **Status**: [🚀 Planned — Voice-First Paradigm]

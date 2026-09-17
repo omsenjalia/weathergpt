@@ -15,7 +15,8 @@ def test_health_endpoint():
     response = client.get("/health")
     assert response.status_code == 200
     data = response.json()
-    assert data == {"status": "ok"}
+    assert data["status"] == "ok"
+    assert "weathergpt-app" in data["clients"]
 
 def test_dev_diagnostics_endpoint():
     """Verify GET /dev returns system metrics, LLM config, and endpoints."""
@@ -112,3 +113,51 @@ def test_advisory_endpoint_shape():
         data = response.json()
         assert "windows" in data
         assert "summary" in data
+
+
+def test_chat_mobile_shape_and_accept_language():
+    """Mobile payload (message + lat/lon + ISO language code) must be accepted."""
+    payload = {
+        "message": "hello",
+        "location": "Ahmedabad, Gujarat",
+        "lat": 23.02,
+        "lon": 72.57,
+        "language": "en",
+        "farmer_mode": False,
+        "crop": "",
+    }
+    response = client.post("/chat", json=payload, headers={"Accept-Language": "hi"})
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data["response"], str) and data["response"]
+    assert data["meta"]["client"] == "mobile"
+    assert data["meta"]["language"] == "Hindi"
+    assert data["meta"]["path"] == "greeting"
+
+
+def test_chat_web_greeting_meta():
+    payload = {"messages": [{"role": "user", "content": "hi"}], "location": "Delhi", "language": "Gujarati"}
+    response = client.post("/chat", json=payload, headers={"User-Agent": "Mozilla/5.0"})
+    assert response.status_code == 200
+    meta = response.json()["meta"]
+    assert meta["client"] == "web"
+    assert meta["language"] == "Gujarati"
+
+
+def test_root_lists_both_clients():
+    data = client.get("/").json()
+    assert set(data["clients"]) == {"web", "mobile"}
+    assert data["fusion_priority"][:2] == ["Open-Meteo (ECMWF)", "AccuWeather"]
+
+
+def test_fusion_endpoint_requires_coords():
+    assert client.get("/fusion").status_code == 422
+
+
+def test_fusion_endpoint_shape():
+    response = client.get("/fusion", params={"lat": 23.02, "lon": 72.57})
+    assert response.status_code in (200, 502, 504)
+    if response.status_code == 200:
+        data = response.json()
+        assert data["weights"]["Open-Meteo (ECMWF)"] == 2.0
+        assert "temperature_2m" in data and "providers" in data
