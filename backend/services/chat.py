@@ -160,6 +160,27 @@ def resolve_history(request: ChatRequest) -> tuple[list[dict] | str, str]:
     return request.message, request.message.strip()
 
 
+def resolve_weather_context(request: ChatRequest, last_message: str) -> str:
+    """Build a bounded query for deterministic fallback location/topic resolution.
+
+    The fallback has no LLM memory, so a follow-up such as "what about tomorrow?"
+    must carry enough recent user context to recover the city from an earlier turn.
+    Assistant replies are deliberately excluded because they may contain many cities.
+    """
+    if not request.messages:
+        return last_message.strip()
+    user_messages = [
+        str(item.get("content") or "").strip()
+        for item in request.messages
+        if isinstance(item, dict) and item.get("role") == "user" and item.get("content")
+    ]
+    user_messages = [message for message in user_messages if message]
+    if not user_messages:
+        return last_message.strip()
+    # Keep the latest turn prominent and cap input to avoid excessive geocoder work.
+    return " ".join(user_messages[-3:])[:600]
+
+
 @dataclass
 class ChatResult:
     response: str
@@ -174,6 +195,7 @@ def run_chat(request: ChatRequest, *, client: ClientKind = "unknown") -> ChatRes
     from agent import run_deterministic_telemetry_fallback, run_weather_agent, has_llm
 
     payload, last_msg = resolve_history(request)
+    context_query = resolve_weather_context(request, last_msg)
     language = normalize_language(request.language)
     location = (request.location or "").strip() or "New Delhi"
     timeout_s = float(os.getenv("CHAT_TIMEOUT_SECONDS", "22"))
@@ -193,7 +215,7 @@ def run_chat(request: ChatRequest, *, client: ClientKind = "unknown") -> ChatRes
     def _fallback(path: str = "fallback") -> ChatResult:
         return _result(
             run_deterministic_telemetry_fallback(
-                location, last_msg, language, lat=request.lat, lon=request.lon
+                location, context_query, language, lat=request.lat, lon=request.lon
             ),
             path,
         )

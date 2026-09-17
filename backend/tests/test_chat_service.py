@@ -12,6 +12,7 @@ from services.chat import (
     is_simple_weather_query,
     is_weather_related,
     normalize_language,
+    resolve_weather_context,
     resolve_history,
 )
 
@@ -38,6 +39,17 @@ def test_resolve_history_web_and_mobile():
     assert isinstance(payload, list) and last == "rain in pune?"
     mobile = ChatRequest(message="temp in surat")
     assert resolve_history(mobile) == ("temp in surat", "temp in surat")
+
+
+def test_resolve_weather_context_preserves_recent_user_location():
+    request = ChatRequest(messages=[
+        {"role": "user", "content": "What is the weather in Anand?"},
+        {"role": "assistant", "content": "Weather in Anand is clear."},
+        {"role": "user", "content": "What about tomorrow?"},
+    ])
+    context = resolve_weather_context(request, "What about tomorrow?")
+    assert "Anand" in context
+    assert "tomorrow" in context
 
 
 def test_greeting_and_simple_heuristics():
