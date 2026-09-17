@@ -224,6 +224,7 @@ weathergpt/
     ├── services/
     │   ├── open_meteo.py               # Baseline provider client, WMO code table, geocode
     │   ├── fusion.py                   # Server-side ensemble engine (parallel, weighted, outlier-guarded)
+    │   ├── response.py                 # Output gate: strips chain-of-thought, validates & orders widgets
     │   └── chat.py                     # Chat routing policy: client detect, language normalise, fast/agent/fallback
     ├── routers/
     │   ├── chat.py                     # POST /chat (web + mobile)
@@ -293,6 +294,7 @@ One FastAPI deployment serves **both** clients. The web SPA (`weathergpt`) and t
 | App | `main.py` | `create_app()` — CORS (`*`), request-logging middleware, mounts routers, `/` index |
 | Contracts | `schemas.py` | `ChatRequest` accepts the web shape (`messages`, language *name*) **and** the mobile shape (`message`, `lat`/`lon`, ISO code); unknown fields ignored |
 | Routing policy | `services/chat.py` | Detects client (body hint → lat/lon → User-Agent), normalises `hi`/`gu-IN`/`Hindi` → canonical name, honours `Accept-Language`, routes greeting / simple / complex queries |
+| Output gate | `services/response.py` | Sanitises LLM output: strips chain-of-thought (`<think>` etc, reasoning preambles), validates widget JSON, merges authoritative backend widgets, enforces prose + widgets contract for web + mobile |
 | Fusion | `services/fusion.py` | Parallel provider fan-out, weighted per-metric mean, outlier guard, confidence score (§10) |
 | Baseline provider | `services/open_meteo.py` | Single WMO code table, typed `UpstreamError` (502/504), geocoding |
 | Agent | `agent.py`, `tools.py` | LangGraph ReAct loop; LLM clients are created **lazily** so the API boots and serves telemetry even without `GROQ_API_KEY` |
