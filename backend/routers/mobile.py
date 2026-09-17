@@ -28,6 +28,19 @@ from services.open_meteo import (
 router = APIRouter(tags=["mobile"])
 
 
+def _bounded(value: Any, low: float | None = None, high: float | None = None) -> float | None:
+    """Return finite numeric upstream data, optionally constrained to a physical range."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number or number in (float("inf"), float("-inf")):
+        return None
+    if low is not None and number < low or high is not None and number > high:
+        return None
+    return number
+
+
 def _get_json(url: str, params: dict[str, Any], timeout: float = 12.0) -> dict[str, Any]:
     try:
         return get_json(url, params, timeout=timeout)
@@ -165,6 +178,13 @@ def _build_weather_snapshot(lat: float, lon: float, language: str) -> dict[str, 
     except Exception as fuse_err:
         print(f"[mobile /weather] fusion skipped: {fuse_err}")
 
+    # Defensive normalization keeps malformed upstream values from reaching clients.
+    temp_c = _bounded(temp_c, -100, 70)
+    feels_c = _bounded(feels_c, -100, 80)
+    humidity = _bounded(humidity, 0, 100)
+    wind_kmh = _bounded(wind_kmh, 0, 500)
+    pressure = _bounded(pressure, 800, 1200)
+    rain_probability = _bounded(rain_probs[0] if rain_probs else None, 0, 100)
     return {
         "lat": lat,
         "lon": lon,
@@ -175,7 +195,7 @@ def _build_weather_snapshot(lat: float, lon: float, language: str) -> dict[str, 
         "weather_code": weather_code,
         "high_c": highs[0] if highs else temp_c,
         "low_c": lows[0] if lows else temp_c,
-        "rain_probability": rain_probs[0] if rain_probs else 0,
+        "rain_probability": rain_probability if rain_probability is not None else 0,
         "wind_kmh": wind_kmh,
         "wind_direction": wind_dir,
         "humidity": humidity,

@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
+import time
 
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
@@ -78,17 +79,24 @@ class UpstreamError(RuntimeError):
 
 def get_json(url: str, params: dict[str, Any], timeout: float = 12.0) -> dict[str, Any]:
     """GET `url` and return the JSON body as a dict, raising `UpstreamError` on failure."""
-    try:
-        with httpx.Client(timeout=timeout) as client:
-            res = client.get(url, params=params)
-            res.raise_for_status()
-            data = res.json()
-    except httpx.TimeoutException as exc:
-        raise UpstreamError("Weather upstream timed out", 504) from exc
-    except httpx.HTTPError as exc:
-        raise UpstreamError(f"Weather upstream error: {exc}", 502) from exc
-    except ValueError as exc:  # invalid JSON
-        raise UpstreamError("Weather upstream returned invalid JSON", 502) from exc
+    last_error: Exception | None = None
+    for attempt in range(2):
+        try:
+            with httpx.Client(timeout=timeout) as client:
+                res = client.get(url, params=params)
+                res.raise_for_status()
+                data = res.json()
+            break
+        except (httpx.TimeoutException, httpx.HTTPError, ValueError) as exc:
+            last_error = exc
+            if attempt == 0:
+                time.sleep(0.15)
+    else:
+        if isinstance(last_error, httpx.TimeoutException):
+            raise UpstreamError("Weather upstream timed out", 504) from last_error
+        if isinstance(last_error, ValueError):
+            raise UpstreamError("Weather upstream returned invalid JSON", 502) from last_error
+        raise UpstreamError("Weather upstream request failed", 502) from last_error
     if not isinstance(data, dict):
         raise UpstreamError("Unexpected weather upstream response", 502)
     return data
