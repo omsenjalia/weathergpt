@@ -1,5 +1,19 @@
 import axios from 'axios'
 
+// Provider trust weights — MUST mirror backend/services/fusion.py PROVIDER_WEIGHTS.
+// Priority: Open-Meteo (ECMWF/IMD NWP) > AccuWeather > WeatherAPI / Tomorrow.io / OpenWeatherMap
+export const PROVIDER_WEIGHTS = {
+  'Open-Meteo (ECMWF)': 2.0,
+  AccuWeather: 1.5,
+  'WeatherAPI.com': 1.2,
+  'Tomorrow.io': 1.2,
+  OpenWeatherMap: 1.1,
+}
+
+// Providers whose temperature deviates from Open-Meteo by more than this are excluded
+// from the weighted mean (mirrors FUSION_OUTLIER_DELTA_C on the backend).
+export const OUTLIER_TEMP_DELTA_C = 7
+
 // Helper to retrieve keys from env or localStorage
 export function getProviderKeys() {
   return {
@@ -45,7 +59,7 @@ async function fetchOpenMeteo(lat, lon, days = 14) {
     const current = res.data.current
     return {
       name: 'Open-Meteo (ECMWF)',
-      weight: 1.0,
+      weight: PROVIDER_WEIGHTS['Open-Meteo (ECMWF)'],
       temp: current.temperature_2m,
       feelsLike: current.apparent_temperature,
       humidity: current.relative_humidity_2m,
@@ -73,7 +87,7 @@ async function fetchWeatherAPI(lat, lon, key) {
     const current = res.data.current
     return {
       name: 'WeatherAPI.com',
-      weight: 1.2,
+      weight: PROVIDER_WEIGHTS['WeatherAPI.com'],
       temp: current.temp_c,
       feelsLike: current.feelslike_c,
       humidity: current.humidity,
@@ -105,7 +119,7 @@ async function fetchTomorrowIO(lat, lon, key) {
     if (!values) return null
     return {
       name: 'Tomorrow.io',
-      weight: 1.2,
+      weight: PROVIDER_WEIGHTS['Tomorrow.io'],
       temp: values.temperature,
       feelsLike: values.temperatureApparent ?? values.temperature,
       humidity: values.humidity,
@@ -133,7 +147,7 @@ async function fetchOpenWeatherMap(lat, lon, key) {
     const wind = res.data.wind
     return {
       name: 'OpenWeatherMap',
-      weight: 1.1,
+      weight: PROVIDER_WEIGHTS.OpenWeatherMap,
       temp: main.temp,
       feelsLike: main.feels_like,
       humidity: main.humidity,
@@ -178,7 +192,7 @@ async function fetchAccuWeather(lat, lon, key) {
 
     return {
       name: 'AccuWeather',
-      weight: 1.25,
+      weight: PROVIDER_WEIGHTS.AccuWeather,
       temp: data.Temperature?.Metric?.Value,
       feelsLike: data.RealFeelTemperature?.Metric?.Value ?? data.Temperature?.Metric?.Value,
       humidity: data.RelativeHumidity,
@@ -210,43 +224,66 @@ export async function getEnsembleWeather(lat, lon, days = 14) {
     fetchAccuWeather(lat, lon, keys.accuweather),
   ])
 
-  const validSources = results
+  const allSources = results
     .filter((r) => r.status === 'fulfilled' && r.value !== null)
     .map((r) => r.value)
+    .sort((a, b) => (b.weight || 0) - (a.weight || 0))
 
-  // Fallback to base OpenMeteo if all fails
-  const baseOpenMeteo = validSources.find((s) => s.name.includes('Open-Meteo'))
-
-  if (validSources.length === 0) {
+  if (allSources.length === 0) {
     throw new Error('All weather telemetry services were unreachable.')
   }
 
+  // Open-Meteo is the trusted baseline: flag vendors that disagree wildly with it.
+  const baseOpenMeteo = allSources.find((s) => s.name.includes('Open-Meteo'))
+  allSources.forEach((s) => {
+    s.outlier =
+      !!baseOpenMeteo &&
+      s !== baseOpenMeteo &&
+      s.temp != null &&
+      Math.abs(s.temp - baseOpenMeteo.temp) > OUTLIER_TEMP_DELTA_C
+  })
+  const validSources = allSources.filter((s) => !s.outlier)
+
   // Calculate Weighted Means
   let totalWeight = 0
-  let weightedTemp = 0
-  let weightedFeelsLike = 0
-  let weightedHumidity = 0
-  let weightedWindSpeed = 0
-  let weightedPressure = 0
-  let weightedUV = 0
+
+  // Weighted mean per metric over the providers that actually reported it — a provider
+  // missing e.g. humidity does not drag the humidity mean towards zero.
+  const weightedMean = (key, { positiveOnly = false } = {}) => {
+    let sum = 0
+    let wsum = 0
+    validSources.forEach((s) => {
+      const v = s[key]
+      if (v == null || Number.isNaN(v) || (positiveOnly && v <= 0)) return
+      const w = s.weight || 1.0
+      sum += v * w
+      wsum += w
+    })
+    return wsum > 0 ? sum / wsum : null
+  }
+  const round1 = (v) => Math.round(v * 10) / 10
 
   validSources.forEach((s) => {
-    const w = s.weight || 1.0
-    totalWeight += w
-    if (s.temp != null) weightedTemp += s.temp * w
-    if (s.feelsLike != null) weightedFeelsLike += s.feelsLike * w
-    if (s.humidity != null) weightedHumidity += s.humidity * w
-    if (s.windSpeed != null) weightedWindSpeed += s.windSpeed * w
-    if (s.pressure != null) weightedPressure += s.pressure * w
-    if (s.uvIndex != null && s.uvIndex > 0) weightedUV += s.uvIndex * w
+    totalWeight += s.weight || 1.0
   })
 
-  const fusedTemp = totalWeight > 0 ? Math.round((weightedTemp / totalWeight) * 10) / 10 : baseOpenMeteo?.temp ?? 25
-  const fusedFeelsLike = totalWeight > 0 ? Math.round((weightedFeelsLike / totalWeight) * 10) / 10 : baseOpenMeteo?.feelsLike ?? fusedTemp
-  const fusedHumidity = totalWeight > 0 ? Math.round(weightedHumidity / totalWeight) : baseOpenMeteo?.humidity ?? 50
-  const fusedWindSpeed = totalWeight > 0 ? Math.round(weightedWindSpeed / totalWeight) : baseOpenMeteo?.windSpeed ?? 10
-  const fusedPressure = totalWeight > 0 ? Math.round(weightedPressure / totalWeight) : baseOpenMeteo?.pressure ?? 1013
-  const fusedUV = totalWeight > 0 ? Math.round((weightedUV / totalWeight) * 10) / 10 : baseOpenMeteo?.uvIndex ?? 0
+  const meanTemp = weightedMean('temp')
+  const fusedTemp = meanTemp != null ? round1(meanTemp) : baseOpenMeteo?.temp ?? 25
+  const meanFeels = weightedMean('feelsLike')
+  const fusedFeelsLike = meanFeels != null ? round1(meanFeels) : baseOpenMeteo?.feelsLike ?? fusedTemp
+  const meanHum = weightedMean('humidity')
+  const fusedHumidity = meanHum != null ? Math.round(meanHum) : baseOpenMeteo?.humidity ?? 50
+  const meanWind = weightedMean('windSpeed')
+  const fusedWindSpeed = meanWind != null ? Math.round(meanWind) : baseOpenMeteo?.windSpeed ?? 10
+  const meanPressure = weightedMean('pressure')
+  const fusedPressure = meanPressure != null ? Math.round(meanPressure) : baseOpenMeteo?.pressure ?? 1013
+  const meanUV = weightedMean('uvIndex', { positiveOnly: true })
+  const fusedUV = meanUV != null ? round1(meanUV) : baseOpenMeteo?.uvIndex ?? 0
+
+  const temps = validSources.map((s) => s.temp).filter((t) => t != null)
+  const tempSpread = temps.length > 1 ? round1(Math.max(...temps) - Math.min(...temps)) : 0
+  const confidence =
+    validSources.length === 1 ? 'single-source' : tempSpread <= 1.5 ? 'high' : tempSpread <= 3.5 ? 'medium' : 'low'
 
   // Air Quality: Pick first provider that supplies valid AQI telemetry
   const aqiProvider = validSources.find((s) => s.aqi != null)
@@ -268,12 +305,16 @@ export async function getEnsembleWeather(lat, lon, days = 14) {
       pm10: pm10Provider?.pm10 ?? null,
     },
     rawOpenMeteo: baseOpenMeteo?.raw || null,
-    providersUsed: validSources.map((s) => ({
+    confidence,
+    tempSpread,
+    totalWeight,
+    providersUsed: allSources.map((s) => ({
       name: s.name,
       temp: Math.round(s.temp * 10) / 10,
       feelsLike: Math.round((s.feelsLike ?? s.temp) * 10) / 10,
       condition: s.condition || 'Normal',
       weight: s.weight,
+      outlier: !!s.outlier,
     })),
   }
 }

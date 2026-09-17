@@ -20,8 +20,19 @@ export async function sendMessage(messagesPayload, location = '', language = 'En
     language,
     farmer_mode: farmerMode,
     crop,
+    client: 'web',
   });
   return res.data.response;
+}
+
+/**
+ * Server-side ensemble fusion (same engine used by the Android app's /weather screen).
+ * Vendor keys stay on the server; returns per-provider readings, weights, outlier flags
+ * and the fused result. Used by the Dev Suite "Ensemble Inspector" for parity checks.
+ */
+export async function getServerFusion(lat, lon) {
+  const res = await axios.get(`${API_BASE}/fusion`, { params: { lat, lon }, timeout: 20000 });
+  return res.data;
 }
 
 export async function getDevDiagnostics() {

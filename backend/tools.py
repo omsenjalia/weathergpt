@@ -28,258 +28,30 @@ def get_user_language(text: str) -> str:
         return "English"
 
 
-# Open-Meteo renamed the variable from `weathercode` to `weather_code`.
-# Both names are accepted in API requests; the response uses the name you sent.
-# Added missing snow / freezing-rain codes (71-77, 85-86).
-WEATHER_CODES = {
-    0: "Clear sky",
-    1: "Mainly clear",
-    2: "Partly cloudy",
-    3: "Overcast",
-    45: "Foggy",
-    48: "Icy fog",
-    51: "Light drizzle",
-    53: "Moderate drizzle",
-    55: "Dense drizzle",
-    61: "Slight rain",
-    63: "Moderate rain",
-    65: "Heavy rain",
-    71: "Slight snow",
-    73: "Moderate snow",
-    75: "Heavy snow",
-    77: "Snow grains",
-    80: "Slight rain showers",
-    81: "Moderate rain showers",
-    82: "Violent rain showers",
-    85: "Slight snow showers",
-    86: "Heavy snow showers",
-    95: "Thunderstorm",
-    96: "Thunderstorm with slight hail",
-    99: "Thunderstorm with heavy hail",
-}
+from services.open_meteo import (
+    WEATHER_CODES,
+    extract_weather_code as _extract_weather_code,
+    geocode as _geocode,
+)
+from services.fusion import fuse_current_weather  # re-exported for backwards compatibility
 
-
-def _extract_weather_code(data: dict) -> int:
-    """Return the weather code from a response dict, handling both naming conventions."""
-    return data.get("weather_code", data.get("weathercode", -1))
+__all__ = [
+    "WEATHER_CODES", "fuse_current_weather", "get_user_language", "geocode_city",
+    "get_current_weather", "get_weather_forecast", "get_hourly_forecast", "get_air_quality",
+    "get_uv_index_and_sun", "get_surface_pressure_and_wind",
+    "get_agricultural_crop_telemetry", "get_severe_weather_alerts",
+]
 
 
 @tool
 def geocode_city(city_name: str) -> dict:
     """Convert a city name to latitude/longitude. Always call this first before weather tools."""
-    try:
-        with httpx.Client(timeout=10) as client:
-            response = client.get(
-                "https://geocoding-api.open-meteo.com/v1/search",
-                params={"name": city_name, "count": 1, "language": "en"},
-            )
-            data = response.json()
-            if "results" in data and data["results"]:
-                result = data["results"][0]
-                return {
-                    "latitude": result["latitude"],
-                    "longitude": result["longitude"],
-                    "city": result.get("name", city_name),
-                    "country": result.get("country", ""),
-                    "state": result.get("admin1", ""),
-                }
-            return {"error": f"City '{city_name}' not found"}
-    except Exception as e:
-        return {"error": str(e)}
-
-
-import os
-
-
-def fuse_current_weather(latitude: float, longitude: float) -> dict:
-    """Multi-source current weather fusion (shared by agent tools + mobile /weather).
-
-    Providers (when keys present):
-      1. Open-Meteo — always (weight 1.0)
-      2. WeatherAPI.com — WEATHERAPI_KEY (1.2)
-      3. OpenWeatherMap — OPENWEATHER_KEY (1.1)
-      4. Tomorrow.io — TOMORROW_KEY (1.2)
-      5. AccuWeather — ACCUWEATHER_KEY (1.25)
-
-    Returns temperature_2m, apparent_temperature, relative_humidity_2m,
-    wind_speed_10m, weathercode, condition, providers_used — or {"error": ...}.
-    """
-    try:
-        sources = []
-        with httpx.Client(timeout=8.0) as client:
-            # 1. Open-Meteo
-            try:
-                res = client.get(
-                    "https://api.open-meteo.com/v1/forecast",
-                    params={
-                        "latitude": latitude,
-                        "longitude": longitude,
-                        "current": (
-                            "temperature_2m,apparent_temperature,wind_speed_10m,"
-                            "precipitation,relative_humidity_2m,weather_code"
-                        ),
-                        "timezone": "auto",
-                    },
-                )
-                data = res.json()
-                current = data.get("current", {})
-                w_code = _extract_weather_code(current)
-                sources.append({
-                    "name": "Open-Meteo (ECMWF)",
-                    "temp": current.get("temperature_2m"),
-                    "feelsLike": current.get("apparent_temperature"),
-                    "humidity": current.get("relative_humidity_2m"),
-                    "windSpeed": current.get("wind_speed_10m"),
-                    "code": w_code,
-                    "condition": WEATHER_CODES.get(w_code, "Unknown"),
-                    "weight": 1.0,
-                })
-            except Exception:
-                pass
-
-            # 2. WeatherAPI.com
-            wapi_key = os.getenv("WEATHERAPI_KEY") or os.getenv("VITE_WEATHERAPI_KEY")
-            if wapi_key:
-                try:
-                    res = client.get(
-                        "https://api.weatherapi.com/v1/current.json",
-                        params={"key": wapi_key, "q": f"{latitude},{longitude}"},
-                    )
-                    curr = res.json().get("current", {})
-                    if "temp_c" in curr:
-                        sources.append({
-                            "name": "WeatherAPI.com",
-                            "temp": curr.get("temp_c"),
-                            "feelsLike": curr.get("feelslike_c"),
-                            "humidity": curr.get("humidity"),
-                            "windSpeed": curr.get("wind_kph"),
-                            "condition": curr.get("condition", {}).get("text"),
-                            "weight": 1.2,
-                        })
-                except Exception:
-                    pass
-
-            # 3. OpenWeatherMap
-            owm_key = os.getenv("OPENWEATHER_KEY") or os.getenv("VITE_OPENWEATHER_KEY")
-            if owm_key:
-                try:
-                    res = client.get(
-                        "https://api.openweathermap.org/data/2.5/weather",
-                        params={
-                            "lat": latitude,
-                            "lon": longitude,
-                            "appid": owm_key,
-                            "units": "metric",
-                        },
-                    )
-                    body = res.json()
-                    main = body.get("main", {})
-                    if "temp" in main:
-                        sources.append({
-                            "name": "OpenWeatherMap",
-                            "temp": main.get("temp"),
-                            "feelsLike": main.get("feels_like"),
-                            "humidity": main.get("humidity"),
-                            "windSpeed": (body.get("wind") or {}).get("speed", 0) * 3.6,
-                            "condition": (body.get("weather") or [{}])[0].get("description"),
-                            "weight": 1.1,
-                        })
-                except Exception:
-                    pass
-
-            # 4. Tomorrow.io
-            tom_key = os.getenv("TOMORROW_KEY") or os.getenv("VITE_TOMORROW_KEY")
-            if tom_key:
-                try:
-                    res = client.get(
-                        "https://api.tomorrow.io/v4/weather/realtime",
-                        params={
-                            "location": f"{latitude},{longitude}",
-                            "apikey": tom_key,
-                        },
-                    )
-                    values = ((res.json().get("data") or {}).get("values")) or {}
-                    if values.get("temperature") is not None:
-                        sources.append({
-                            "name": "Tomorrow.io",
-                            "temp": values.get("temperature"),
-                            "feelsLike": values.get("temperatureApparent", values.get("temperature")),
-                            "humidity": values.get("humidity"),
-                            "windSpeed": (values.get("windSpeed") or 0) * 3.6,
-                            "condition": None,
-                            "weight": 1.2,
-                        })
-                except Exception:
-                    pass
-
-            # 5. AccuWeather
-            accu_key = os.getenv("ACCUWEATHER_KEY") or os.getenv("VITE_ACCUWEATHER_KEY")
-            if accu_key:
-                try:
-                    loc_res = client.get(
-                        "https://dataservice.accuweather.com/locations/v1/cities/geoposition/search",
-                        params={"apikey": accu_key, "q": f"{latitude},{longitude}"},
-                    )
-                    loc_key = (loc_res.json() or {}).get("Key")
-                    if loc_key:
-                        cond_res = client.get(
-                            f"https://dataservice.accuweather.com/currentconditions/v1/{loc_key}",
-                            params={"apikey": accu_key, "details": "true"},
-                        )
-                        data = (cond_res.json() or [None])[0] or {}
-                        temp = (data.get("Temperature") or {}).get("Metric", {}).get("Value")
-                        if temp is not None:
-                            feels = (
-                                (data.get("RealFeelTemperature") or {})
-                                .get("Metric", {})
-                                .get("Value")
-                            )
-                            wind = (data.get("Wind") or {}).get("Speed", {}).get("Metric", {}).get("Value")
-                            sources.append({
-                                "name": "AccuWeather",
-                                "temp": temp,
-                                "feelsLike": feels if feels is not None else temp,
-                                "humidity": data.get("RelativeHumidity"),
-                                "windSpeed": wind,
-                                "condition": data.get("WeatherText"),
-                                "weight": 1.25,
-                            })
-                except Exception:
-                    pass
-
-        if not sources:
-            return {"error": "Failed to retrieve weather data from providers"}
-
-        usable = [s for s in sources if s.get("temp") is not None]
-        if not usable:
-            return {"error": "No provider returned temperature"}
-
-        total_w = sum(s["weight"] for s in usable)
-        weighted_temp = sum(s["temp"] * s["weight"] for s in usable) / total_w
-        weighted_feels = sum((s.get("feelsLike") or s["temp"]) * s["weight"] for s in usable) / total_w
-        weighted_humidity = sum((s.get("humidity") or 50) * s["weight"] for s in usable) / total_w
-        weighted_wind = sum((s.get("windSpeed") or 0) * s["weight"] for s in usable) / total_w
-
-        base = next((s for s in usable if s.get("code") is not None), usable[0])
-        condition = base.get("condition") or next(
-            (s.get("condition") for s in usable if s.get("condition")), "Normal"
-        )
-        return {
-            "temperature_2m": round(weighted_temp, 1),
-            "apparent_temperature": round(weighted_feels, 1),
-            "relative_humidity_2m": round(weighted_humidity),
-            "wind_speed_10m": round(weighted_wind, 1),
-            "weathercode": base.get("code", 0),
-            "condition": condition,
-            "providers_used": [s["name"] for s in usable],
-        }
-    except Exception as e:
-        return {"error": str(e)}
+    return _geocode(city_name)
 
 
 @tool
 def get_current_weather(latitude: float, longitude: float) -> dict:
-    """Get current weather conditions using multi-source telemetry fusion (Open-Meteo, WeatherAPI, Tomorrow.io, OpenWeather, AccuWeather). Call geocode_city first for coordinates."""
+    """Get current weather conditions using multi-source telemetry fusion (Open-Meteo > AccuWeather > WeatherAPI, Tomorrow.io, OpenWeather). Call geocode_city first for coordinates."""
     return fuse_current_weather(latitude, longitude)
 
 
