@@ -11,6 +11,7 @@ from services.chat import (
     is_greeting_or_meta,
     is_simple_weather_query,
     is_weather_related,
+    classify_intent,
     normalize_language,
     resolve_weather_context,
     resolve_history,
@@ -74,3 +75,10 @@ def test_weather_domain_allows_conversation_and_research():
 def test_unrelated_requests_do_not_take_weather_fast_path():
     assert not is_simple_weather_query("write Python code for a weather app", False)
     assert not is_weather_related("Help me study for my exam")
+
+
+def test_intent_labels_support_conversation_and_research():
+    assert classify_intent("No, I mean chances of raining") == "rain_probability"
+    assert classify_intent("Compare rainfall with last year") == "historical_weather"
+    assert classify_intent("Why did the forecast change?") == "weather_explanation"
+    assert classify_intent("write Python code for a weather app") == "unrelated"

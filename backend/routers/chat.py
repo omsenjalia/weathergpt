@@ -32,5 +32,5 @@ async def chat(request: ChatRequest, http_request: Request) -> ChatResponse:
     return ChatResponse(
         response=result.response,
         meta={"path": result.path, "client": result.client, "language": result.language,
-              "location": result.location},
+              "location": result.location, "intent": result.intent},
     )

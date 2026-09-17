@@ -74,6 +74,28 @@ def is_weather_related(text: str) -> bool:
         marker in q for marker in SIMPLE_MARKERS + COMPLEX_MARKERS
     )
 
+
+def classify_intent(text: str) -> str:
+    """Return a transparent, stable intent label for clients and diagnostics."""
+    q = (text or "").lower().strip()
+    if is_greeting_or_meta(q):
+        return "greeting"
+    if any(marker in q for marker in OFF_TOPIC_MARKERS):
+        return "unrelated"
+    if any(marker in q for marker in ("historical", "history", "last year", "trend", "anomaly")):
+        return "historical_weather"
+    if any(marker in q for marker in ("compare", "versus", " vs ", "provider", "accuracy")):
+        return "weather_comparison"
+    if any(marker in q for marker in ("why", "explain", "how does", "what causes")):
+        return "weather_explanation"
+    if any(marker in q for marker in ("rain", "raining", "rainfall", "precipitation", "umbrella")):
+        return "rain_probability"
+    if any(marker in q for marker in SIMPLE_MARKERS):
+        return "weather_current_or_forecast"
+    if q:
+        return "weather_conversation"
+    return "ambiguous"
+
 GREETING_REPLY = (
     "I'm **WeatherGPT** — I help with live weather, forecasts, rain alerts, "
     "air quality, and farming advisories.\n\n"
@@ -188,6 +210,7 @@ class ChatResult:
     client: ClientKind
     language: str
     location: str
+    intent: str
 
 
 def run_chat(request: ChatRequest, *, client: ClientKind = "unknown") -> ChatResult:
@@ -197,6 +220,7 @@ def run_chat(request: ChatRequest, *, client: ClientKind = "unknown") -> ChatRes
     payload, last_msg = resolve_history(request)
     context_query = resolve_weather_context(request, last_msg)
     language = normalize_language(request.language)
+    intent = classify_intent(context_query)
     location = (request.location or "").strip() or "New Delhi"
     timeout_s = float(os.getenv("CHAT_TIMEOUT_SECONDS", "22"))
     fast_path = os.getenv("CHAT_FAST_PATH", "1") != "0"
@@ -207,10 +231,10 @@ def run_chat(request: ChatRequest, *, client: ClientKind = "unknown") -> ChatRes
                 cleaned = sanitize_response(text)
                 # Use cleaned if it has content, otherwise fall back to original
                 if cleaned and cleaned.strip():
-                    return ChatResult(cleaned, path, client, language, location)
+                    return ChatResult(cleaned, path, client, language, location, intent)
         except Exception as e:
             print(f"[chat] sanitize_response failed: {e}")
-        return ChatResult(text, path, client, language, location)
+        return ChatResult(text, path, client, language, location, intent)
 
     def _fallback(path: str = "fallback") -> ChatResult:
         return _result(
