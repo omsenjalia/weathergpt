@@ -153,20 +153,48 @@ async def get_weather(
     except Exception:
         pass
 
+    # Overlay multi-provider fusion for current conditions (same as agent tools).
+    # Forecast / UV / AQI / sunrise stay on Open-Meteo for structure + reliability.
+    providers_used = ["Open-Meteo (ECMWF)"]
+    source_label = "open-meteo"
+    temp_c = current.get("temperature_2m")
+    feels_c = current.get("apparent_temperature")
+    humidity = current.get("relative_humidity_2m")
+    wind_kmh = current.get("wind_speed_10m")
+    condition = _code_to_condition(code)
+    weather_code = code
+    try:
+        from tools import fuse_current_weather
+
+        fused = fuse_current_weather(lat, lon)
+        if isinstance(fused, dict) and not fused.get("error"):
+            temp_c = fused.get("temperature_2m", temp_c)
+            feels_c = fused.get("apparent_temperature", feels_c)
+            humidity = fused.get("relative_humidity_2m", humidity)
+            wind_kmh = fused.get("wind_speed_10m", wind_kmh)
+            if fused.get("condition"):
+                condition = fused["condition"]
+            if fused.get("weathercode") is not None:
+                weather_code = fused["weathercode"]
+            providers_used = fused.get("providers_used") or providers_used
+            source_label = "multi-provider-fusion"
+    except Exception as fuse_err:
+        print(f"[mobile /weather] fusion skipped: {fuse_err}")
+
     return {
         "lat": lat,
         "lon": lon,
         "language": language,
-        "temperature_c": current.get("temperature_2m"),
-        "feels_like_c": current.get("apparent_temperature"),
-        "condition": _code_to_condition(code),
-        "weather_code": code,
-        "high_c": highs[0] if highs else current.get("temperature_2m"),
-        "low_c": lows[0] if lows else current.get("temperature_2m"),
+        "temperature_c": temp_c,
+        "feels_like_c": feels_c,
+        "condition": condition,
+        "weather_code": weather_code,
+        "high_c": highs[0] if highs else temp_c,
+        "low_c": lows[0] if lows else temp_c,
         "rain_probability": rain_probs[0] if rain_probs else 0,
-        "wind_kmh": current.get("wind_speed_10m"),
+        "wind_kmh": wind_kmh,
         "wind_direction": wind_dir,
-        "humidity": current.get("relative_humidity_2m"),
+        "humidity": humidity,
         "pressure_hpa": current.get("surface_pressure"),
         "precipitation_mm": current.get("precipitation"),
         "uv_index": uv_max[0] if uv_max else None,
@@ -177,7 +205,8 @@ async def get_weather(
         "hourly": hourly_out,
         "timezone": data.get("timezone"),
         "forecast": forecast,
-        "source": "open-meteo",
+        "source": source_label,
+        "providers_used": providers_used,
         "fetched_at": datetime.utcnow().isoformat() + "Z",
     }
 
