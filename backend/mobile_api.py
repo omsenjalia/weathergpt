@@ -381,3 +381,79 @@ async def get_comparison(
         "locations": series,
         "source": "open-meteo-archive",
     }
+
+
+@router.get("/weathernext")
+async def get_weathernext(
+    lat: float = Query(..., description="Latitude"),
+    lon: float = Query(..., description="Longitude"),
+    forecast_days: int = Query(5, ge=1, le=15),
+) -> dict[str, Any]:
+    """Google WeatherNext 2 ensemble via Open-Meteo (no GCP allowlist required).
+
+    Use this while waiting for official WeatherNext BigQuery/Earth Engine access.
+    Source: ensemble-api.open-meteo.com models=google_weathernext2_ensemble
+    """
+    data = _get_json(
+        "https://ensemble-api.open-meteo.com/v1/ensemble",
+        {
+            "latitude": lat,
+            "longitude": lon,
+            "hourly": "temperature_2m,precipitation,wind_speed_10m,surface_pressure",
+            "models": "google_weathernext2_ensemble",
+            "forecast_days": forecast_days,
+            "timezone": "auto",
+        },
+        timeout=25.0,
+    )
+    hourly = data.get("hourly") or {}
+    times = hourly.get("time") or []
+    # Ensemble mean series (Open-Meteo provides temperature_2m without member suffix)
+    temps = hourly.get("temperature_2m") or []
+    precip = hourly.get("precipitation") or []
+    wind = hourly.get("wind_speed_10m") or []
+    pressure = hourly.get("surface_pressure") or []
+
+    points = []
+    for i, t in enumerate(times):
+        points.append(
+            {
+                "time": t,
+                "temperature_c": temps[i] if i < len(temps) else None,
+                "precipitation_mm": precip[i] if i < len(precip) else None,
+                "wind_kmh": wind[i] if i < len(wind) else None,
+                "pressure_hpa": pressure[i] if i < len(pressure) else None,
+            }
+        )
+
+    # Compact daily rollup from hourly mean
+    by_day: dict[str, list[float]] = {}
+    for pt in points:
+        if pt["temperature_c"] is None:
+            continue
+        day = str(pt["time"])[:10]
+        by_day.setdefault(day, []).append(float(pt["temperature_c"]))
+    daily = [
+        {
+            "date": day,
+            "temp_min_c": round(min(vals), 1),
+            "temp_max_c": round(max(vals), 1),
+            "temp_mean_c": round(sum(vals) / len(vals), 1),
+        }
+        for day, vals in sorted(by_day.items())
+    ]
+
+    return {
+        "lat": lat,
+        "lon": lon,
+        "model": "google_weathernext2_ensemble",
+        "source": "open-meteo",
+        "note": (
+            "WeatherNext 2 ensemble mean via Open-Meteo. "
+            "Official GCP BigQuery/Earth Engine access is separate (allowlist)."
+        ),
+        "hourly": points[:120],  # cap payload size
+        "daily": daily,
+        "generationtime_ms": data.get("generationtime_ms"),
+        "timezone": data.get("timezone"),
+    }
