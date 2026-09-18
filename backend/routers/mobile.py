@@ -8,12 +8,15 @@ and the web dashboard agree.
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
 
+from services import advisory as advisory_ai
+from services import typesafe
 from services.fusion import fuse_current_weather
 from services.open_meteo import (
     AIR_QUALITY_URL,
@@ -222,8 +225,18 @@ async def get_advisory(
     lon: float = Query(..., ge=-180, le=180),
     crop: str = Query("", description="Optional crop name"),
     days: int = Query(3, ge=1, le=7),
+    growth_stage: str = Query("", description="Optional crop growth stage (e.g. Flowering)"),
+    soil: str = Query("", description="Optional soil type"),
+    irrigation: str = Query("", description="Optional irrigation type"),
 ) -> dict[str, Any]:
-    """Simple farm action-window style advisory for mobile farmer mode."""
+    """Simple farm action-window style advisory for mobile farmer mode.
+
+    Threshold-based by default. When ``TYPESAFE_API_KEY`` is configured, one
+    batched System One call scores every day per activity (composite scoring)
+    and may make days/hours *more* conservative with high-confidence answers.
+    The response carries additive ``ai``/``hourly`` fields plus an
+    ``advisory_engine`` label; older clients ignore them.
+    """
     data = await run_in_threadpool(
         _get_json,
         FORECAST_URL,
@@ -233,6 +246,10 @@ async def get_advisory(
             "daily": (
                 "temperature_2m_max,temperature_2m_min,precipitation_probability_max,"
                 "rain_sum,wind_speed_10m_max,weather_code"
+            ),
+            "hourly": (
+                "temperature_2m,precipitation_probability,precipitation,"
+                "wind_speed_10m,weather_code"
             ),
             "forecast_days": days,
             "timezone": "auto",
@@ -283,6 +300,40 @@ async def get_advisory(
         )
 
     crop_label = crop.strip() or "general crops"
+
+    # Hourly activity bands (transparent thresholds) for the first two days —
+    # the app's action-window bars render these directly.
+    hourly_by_date = advisory_ai.build_hourly_by_date((data.get("hourly") or {}), dates)
+    for window in windows[:2]:
+        window["hourly"] = hourly_by_date.get(str(window.get("date"))) or {}
+
+    # TypeSafe composite-scoring overlay: one batched call for all days.
+    ai_meta: dict[str, Any] = {"enabled": False, "applied": False, "model": None}
+    if windows and typesafe.is_enabled():
+        stats = [advisory_ai.daily_stats(data.get("hourly") or {}, str(d)) for d in dates]
+        state_text = advisory_ai.build_state(
+            crop_label, lat, lon, dates, stats,
+            farm={
+                "growth_stage": growth_stage,
+                "soil": soil,
+                "irrigation": irrigation,
+            },
+        )
+        result = typesafe.evaluate(
+            state_text,
+            advisory_ai.build_questions(dates),
+            timeout=float(os.getenv("TYPESAFE_ADVISORY_TIMEOUT_SECONDS", "6")),
+            label="advisory",
+        )
+        if result:
+            ai_meta = advisory_ai.apply_typesafe_overlay(
+                windows,
+                hourly_by_date,
+                result["answers"],
+                min_confidence=float(os.getenv("TYPESAFE_ADVISORY_MIN_CONFIDENCE", "0.55")),
+                model=typesafe.model_name(),
+            )
+
     good_days = sum(1 for w in windows if w["suitability"] == "good")
     summary = (
         f"Advisory for {crop_label}: {good_days}/{len(windows)} day(s) look favourable "
@@ -294,6 +345,8 @@ async def get_advisory(
         "crop": crop_label,
         "summary": summary,
         "windows": windows,
+        "advisory_engine": "system-one+thresholds" if ai_meta.get("applied") else "thresholds",
+        "ai": ai_meta,
         "source": "open-meteo",
     }
 
