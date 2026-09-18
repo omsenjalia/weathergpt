@@ -13,6 +13,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
 from schemas import SandboxRequest
+from services import typesafe
 from services.fusion import PROVIDER_WEIGHTS, configured_providers, fuse_current_weather
 from state import RECENT_LOGS, START_DATETIME, START_TIME
 
@@ -87,6 +88,57 @@ async def sandbox_test(request: SandboxRequest):
         )
 
 
+@router.get("/dev/intent")
+@router.get("/dev/intent/", include_in_schema=False)
+async def dev_intent(
+    text: str = Query(
+        ...,
+        min_length=1,
+        max_length=500,
+        description="Sample user message to classify",
+    ),
+) -> dict:
+    """Chat-routing decision inspector: keyword classifier vs TypeSafe System One.
+
+    Runs the exact same `decide_intent` as `/chat` and shows both engines'
+    answers, the full System One probability distribution, which engine wins,
+    and whether the message would take the deterministic fast path. Offline
+    diagnostics: without a TYPESAFE_API_KEY the System One block is null.
+    """
+    from services.chat import FAST_INTENTS, decide_intent, is_simple_weather_query
+
+    started = time.perf_counter()
+    decision = await run_in_threadpool(decide_intent, text)
+    ai = decision.get("ai")
+    fast_path_enabled = os.getenv("CHAT_FAST_PATH", "1") != "0"
+    if decision["engine"] == "system-one" and ai:
+        would_fast_path = (
+            decision["intent"] in FAST_INTENTS and (ai.get("live_data") or 0.0) >= 0.7
+        )
+        system_one = {
+            "route": ai.get("route"),
+            "probabilities": ai.get("probabilities") or {},
+            "confidence": ai.get("confidence"),
+            "live_data": ai.get("live_data"),
+            "smalltalk": ai.get("smalltalk"),
+            "abuse": ai.get("abuse"),
+        }
+    else:
+        would_fast_path = fast_path_enabled and is_simple_weather_query(text, False)
+        system_one = None
+    return {
+        "text": text,
+        "engine": decision["engine"],
+        "intent": decision["intent"],
+        "confidence": decision["confidence"],
+        "keyword_intent": decision["keyword_intent"],
+        "system_one": system_one,
+        "would_fast_path": bool(would_fast_path),
+        "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
 @router.get("/dev")
 @router.get("/dev/", include_in_schema=False)
 async def dev_diagnostics(http_request: Request):
@@ -128,6 +180,13 @@ async def dev_diagnostics(http_request: Request):
             "cpu_percent": cpu_pct,
         },
         "llm_config": {"model": GROQ_MODEL, "has_groq_key": _has("GROQ_API_KEY")},
+        "ai_decisions": {
+            "typesafe_enabled": typesafe.is_enabled(),
+            "typesafe_model": typesafe.model_name() if typesafe.is_enabled() else None,
+            "chat_routing": typesafe.is_enabled()
+            and os.getenv("TYPESAFE_CHAT_ROUTING", "1") != "0",
+            "advisory_scoring": typesafe.is_enabled(),
+        },
         "provider_keys_status": {
             "groq_api_key": _has("GROQ_API_KEY"),
             "weatherapi_key": _has("WEATHERAPI_KEY", "VITE_WEATHERAPI_KEY"),
