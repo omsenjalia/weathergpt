@@ -91,6 +91,12 @@ def _build_weather_snapshot(lat: float, lon: float, language: str, source: str =
     # If new service succeeds, use it
     if selection.forecast:
         fc = selection.forecast
+        field_sources: dict[str, Any] = {}
+        try:
+            from services.forecast_supplement import supplement_forecast
+            field_sources = supplement_forecast(fc, lat, lon, forecast_days=7)
+        except Exception as exc:  # secondary data must never break the primary answer
+            field_sources = {"_supplement": {"attempted": True, "errors": [{"reason": f"exception_{type(exc).__name__}"}]}}
         # Build response from normalized forecast
         current = fc.current
         daily_list = fc.daily
@@ -126,16 +132,23 @@ def _build_weather_snapshot(lat: float, lon: float, language: str, source: str =
 
         # Build hourly_out for legacy
         hourly_out = []
-        for p in hourly_list[:24]:
+        cutoff = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+        upcoming = [p for p in hourly_list if p.time_utc >= cutoff] or hourly_list
+        for p in upcoming[:24]:
             hourly_out.append({
                 "time": p.time_utc.isoformat(),
                 "temperature_c": p.temperature_c,
                 "rain_probability": p.precipitation_probability,
+                "precipitation_mm": p.precipitation_mm,
+                "wind_kmh": p.wind_speed_kmh,
+                "humidity": p.humidity_percent,
+                "condition": p.condition,
+                "weather_code": p.weather_code,
             })
 
         # Forecast 3-day
         forecast = []
-        for d in daily_list[:3]:
+        for d in daily_list[:7]:
             forecast.append({
                 "date": d.get("date"),
                 "high_c": d.get("high_c"),
@@ -143,6 +156,13 @@ def _build_weather_snapshot(lat: float, lon: float, language: str, source: str =
                 "rain_probability": d.get("rain_probability"),
                 "rain_mm": d.get("rain_mm"),
                 "condition": d.get("condition"),
+                "weather_code": d.get("weather_code"),
+                "wind_kmh_max": d.get("wind_kmh_max"),
+                "sunrise": d.get("sunrise"),
+                "sunset": d.get("sunset"),
+                "uv_index_max": d.get("uv_index_max"),
+                "covers_full_day": d.get("covers_full_day"),
+                "precipitation_interval": d.get("precipitation_interval"),
             })
 
         # UV, sunrise/sunset from daily
@@ -190,6 +210,7 @@ def _build_weather_snapshot(lat: float, lon: float, language: str, source: str =
             "providers_used": fc.provenance.sources,
             "fallback_reasons": selection.fallback_reasons,
             "provenance": fc.provenance.to_dict(),
+            "field_sources": field_sources,
             "fetched_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "mode": mode,
         }

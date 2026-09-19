@@ -27,6 +27,7 @@ from fastapi.responses import Response
 from services.forecast import get_forecast_service
 from services.forecast_models import ProviderName, SELECTION_POLICY_VERSION
 from services.forecast_aggregation import build_precip_next_24h, build_temperature_spread
+from services.forecast_supplement import is_degraded, supplement_forecast
 from services.weathernext_catalog import get_catalog, surface_access_manifest
 from services.config import get_config
 from services.forecast_cache import get_cache
@@ -61,6 +62,8 @@ async def get_weather_v2(
     model: str = Query("weathernext_3", description="weathernext_3|weathernext_2 when requested_source=weathernext"),
     run_id: str = Query("", description="Pin a WeatherNext run, e.g. weathernext_3_0_0_2026091900"),
     forecast_days: int = Query(3, ge=1, le=15),
+    hourly_hours: int = Query(24, ge=1, le=168, description="Hourly buckets to return, starting from the current hour"),
+    supplement: bool = Query(True, description="Fill null secondary fields (sunrise, UV, AQI, humidity…) from Open-Meteo, attributed per field"),
     language: str = Query("en"),
 ) -> dict[str, Any]:
     """Compact current/forecast overview with provenance.
@@ -69,6 +72,12 @@ async def get_weather_v2(
     Explicit source pins bypass automatic substitution and never substitute
     another provider: a pinned source either returns its data or an explicit
     ``status: unavailable`` with ``fallback_reasons``.
+
+    The primary forecast (temperature, precipitation, wind, run) always comes
+    from the selected source. Fields that source cannot provide (astronomy,
+    UV, air quality, humidity when not selected) are filled from Open-Meteo
+    and attributed per field in ``field_sources`` so the client can render
+    "via Open-Meteo" instead of "—".
     """
     mode = _validate_mode(mode)
     effective_source = _resolve_source(requested_source, source)
@@ -118,6 +127,22 @@ async def get_weather_v2(
 
         forecast = result.forecast
         now = datetime.now(timezone.utc)
+
+        field_sources: dict[str, Any] = {}
+        if supplement:
+            try:
+                field_sources = supplement_forecast(forecast, lat, lon, forecast_days=forecast_days)
+            except Exception as exc:  # never let a secondary fetch break the primary answer
+                field_sources = {"_supplement": {"attempted": True, "errors": [{"reason": f"exception_{type(exc).__name__}"}]}}
+
+        # Hourly starts at the current hour: a client asking for "the next 24 h"
+        # must not receive buckets that are already in the past.
+        cutoff = now.replace(minute=0, second=0, microsecond=0)
+        upcoming = [p for p in forecast.hourly if p.time_utc >= cutoff] or forecast.hourly
+        hourly_out = [p.to_dict() for p in upcoming[:hourly_hours]]
+
+        degraded = is_degraded(result.fallback_reasons, is_stale=result.is_stale)
+
         # Build response with required fields
         return {
             "schema_version": forecast.schema_version,
@@ -126,8 +151,11 @@ async def get_weather_v2(
             "model": forecast.provenance.model,
             "location": forecast.location,
             "current": forecast.current.to_dict() if forecast.current else None,
-            "hourly": [p.to_dict() for p in forecast.hourly[:24]],
+            "hourly": hourly_out,
+            "hourly_available": len(forecast.hourly),
             "daily": forecast.daily,
+            "field_sources": field_sources,
+            "degraded": degraded,
             # Everyone-card summaries (null when the provider cannot support them honestly)
             "temperature_spread": build_temperature_spread(forecast, now),
             "precip_next_24h": build_precip_next_24h(forecast, now),
@@ -139,7 +167,9 @@ async def get_weather_v2(
                 "fallback_reasons": result.fallback_reasons,
                 "tried_providers": result.tried_providers,
                 "is_stale": result.is_stale,
+                "degraded": degraded,
                 "latency_ms": result.latency_ms,
+                "timezone": (forecast.location or {}).get("timezone"),
             },
             "source": result.selected_source.value,
             "providers_used": forecast.provenance.sources,
