@@ -1,9 +1,14 @@
 """Mobile app REST endpoints (Flutter `weathergpt-app`).
 
 Routes match `docs/web_app_api_contract.md` in weathergpt-app. Forecast structure, UV,
-AQI and sun times come from Open-Meteo; *current* conditions are overlaid with the shared
-multi-provider fusion engine (Open-Meteo > AccuWeather > others) so the phone home screen
-and the web dashboard agree.
+AQI and sun times come from shared forecast service with IMD -> WeatherNext ->
+AccuWeather -> Open-Meteo priority. Legacy Open-Meteo direct path retained for
+backward compatibility but now goes through forecast service.
+
+Fixes:
+- Heat handling uses worst-band merging, not unconditional caution override
+- Hourly bands use data-sufficiency gate
+- Advisory uses fixed deterministic baseline before Jev overlay
 """
 
 from __future__ import annotations
@@ -27,6 +32,8 @@ from services.open_meteo import (
     extract_weather_code,
     get_json,
 )
+from services.forecast import get_forecast_service
+from services.config import get_config
 
 router = APIRouter(tags=["mobile"])
 
@@ -56,12 +63,137 @@ async def get_weather(
     lat: float = Query(..., ge=-90, le=90, description="Latitude (-90 to 90)"),
     lon: float = Query(..., ge=-180, le=180, description="Longitude (-180 to 180)"),
     language: str = Query("en", description="Preferred language code"),
+    source: str = Query("auto", description="auto|imd|weathernext|accuweather|open_meteo (researcher mode)"),
+    mode: str = Query("everyone", description="everyone|farmer|researcher"),
 ) -> dict[str, Any]:
-    """Current conditions + today high/low + 3-day outlook for the Flutter home screens."""
-    return await run_in_threadpool(_build_weather_snapshot, lat, lon, language)
+    """Current conditions + today high/low + 3-day outlook for the Flutter home screens.
+
+    Uses shared forecast service with IMD -> WeatherNext -> AccuWeather -> Open-Meteo.
+    Explicit source pins bypass automatic substitution for researcher mode.
+    """
+    return await run_in_threadpool(_build_weather_snapshot, lat, lon, language, source, mode)
 
 
-def _build_weather_snapshot(lat: float, lon: float, language: str) -> dict[str, Any]:
+def _build_weather_snapshot(lat: float, lon: float, language: str, source: str = "auto", mode: str = "everyone") -> dict[str, Any]:
+    # Try new forecast service first
+    forecast_service = get_forecast_service()
+    selection = forecast_service.select_forecast(
+        lat=lat,
+        lon=lon,
+        product="forecast",
+        requested_source=source,
+        mode=mode,
+        forecast_days=7,
+    )
+
+    # If new service succeeds, use it
+    if selection.forecast:
+        fc = selection.forecast
+        # Build response from normalized forecast
+        current = fc.current
+        daily_list = fc.daily
+        hourly_list = fc.hourly
+
+        # Legacy compatibility: map to old structure but with provenance
+        temp_c = current.temperature_c if current else None
+        feels_c = current.feels_like_c if current else None
+        humidity = current.humidity_percent if current else None
+        wind_kmh = current.wind_speed_kmh if current else None
+        pressure = current.pressure_hpa if current else None
+        condition = current.condition if current else "Unknown"
+        weather_code = current.weather_code if current else 0
+
+        # Air quality from forecast or best-effort
+        aqi = None
+        pm25 = None
+        if fc.air_quality:
+            aqi = fc.air_quality.get("european_aqi")
+            pm25 = fc.air_quality.get("pm2_5")
+        else:
+            try:
+                aq = _get_json(
+                    AIR_QUALITY_URL,
+                    {"latitude": lat, "longitude": lon, "current": "european_aqi,pm2_5", "timezone": "auto"},
+                    timeout=8.0,
+                )
+                cur_aq = aq.get("current") or {}
+                aqi = cur_aq.get("european_aqi")
+                pm25 = cur_aq.get("pm2_5")
+            except Exception:
+                pass
+
+        # Build hourly_out for legacy
+        hourly_out = []
+        for p in hourly_list[:24]:
+            hourly_out.append({
+                "time": p.time_utc.isoformat(),
+                "temperature_c": p.temperature_c,
+                "rain_probability": p.precipitation_probability,
+            })
+
+        # Forecast 3-day
+        forecast = []
+        for d in daily_list[:3]:
+            forecast.append({
+                "date": d.get("date"),
+                "high_c": d.get("high_c"),
+                "low_c": d.get("low_c"),
+                "rain_probability": d.get("rain_probability"),
+                "rain_mm": d.get("rain_mm"),
+                "condition": d.get("condition"),
+            })
+
+        # UV, sunrise/sunset from daily
+        uv_index = None
+        sunrise = None
+        sunset = None
+        if daily_list:
+            uv_index = daily_list[0].get("uv_index") or daily_list[0].get("uv_index_max")
+            sunrise = daily_list[0].get("sunrise")
+            sunset = daily_list[0].get("sunset")
+
+        temp_c = _bounded(temp_c, -100, 70)
+        feels_c = _bounded(feels_c, -100, 80)
+        humidity = _bounded(humidity, 0, 100)
+        wind_kmh = _bounded(wind_kmh, 0, 500)
+        pressure = _bounded(pressure, 800, 1200)
+
+        return {
+            "lat": lat,
+            "lon": lon,
+            "language": language,
+            "temperature_c": temp_c,
+            "feels_like_c": feels_c,
+            "condition": condition,
+            "weather_code": weather_code,
+            "high_c": daily_list[0].get("high_c") if daily_list else temp_c,
+            "low_c": daily_list[0].get("low_c") if daily_list else temp_c,
+            "rain_probability": _bounded(daily_list[0].get("rain_probability") if daily_list else None, 0, 100) or 0,
+            "wind_kmh": wind_kmh,
+            "wind_direction": current.wind_direction_deg if current else None,
+            "humidity": humidity,
+            "pressure_hpa": pressure,
+            "precipitation_mm": current.precipitation_mm if current else None,
+            "uv_index": uv_index,
+            "sunrise": sunrise,
+            "sunset": sunset,
+            "aqi": aqi,
+            "pm2_5": pm25,
+            "hourly": hourly_out,
+            "timezone": fc.location.get("timezone", "auto"),
+            "forecast": forecast,
+            "source": selection.selected_source.value,
+            "requested_source": selection.requested_source,
+            "selection_policy_version": fc.provenance.selection_policy_version,
+            "providers_used": fc.provenance.sources,
+            "fallback_reasons": selection.fallback_reasons,
+            "provenance": fc.provenance.to_dict(),
+            "fetched_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "mode": mode,
+        }
+
+    # Fallback to legacy Open-Meteo direct path if new service unavailable
+    # This preserves existing behavior when WeatherNext/IMD not configured
     data = _get_json(
         FORECAST_URL,
         {
@@ -112,7 +244,6 @@ def _build_weather_snapshot(lat: float, lon: float, language: str) -> dict[str, 
     h_times = hourly.get("time") or []
     h_temps = hourly.get("temperature_2m") or []
     h_pop = hourly.get("precipitation_probability") or []
-    # next 24 hourly points from "now" if possible
     hourly_out = []
     for i in range(min(24, len(h_times))):
         hourly_out.append({
@@ -126,18 +257,12 @@ def _build_weather_snapshot(lat: float, lon: float, language: str) -> dict[str, 
     uv_max = daily.get("uv_index_max") or []
     wind_dir = current.get("wind_direction_10m")
 
-    # Air quality (best-effort)
     aqi = None
     pm25 = None
     try:
         aq = _get_json(
             AIR_QUALITY_URL,
-            {
-                "latitude": lat,
-                "longitude": lon,
-                "current": "european_aqi,pm2_5",
-                "timezone": "auto",
-            },
+            {"latitude": lat, "longitude": lon, "current": "european_aqi,pm2_5", "timezone": "auto"},
             timeout=8.0,
         )
         cur_aq = aq.get("current") or {}
@@ -146,8 +271,6 @@ def _build_weather_snapshot(lat: float, lon: float, language: str) -> dict[str, 
     except Exception:
         pass
 
-    # Overlay multi-provider fusion on *current* conditions. Open-Meteo `current` is passed
-    # in so it is not fetched twice; forecast / UV / AQI / sun stay on Open-Meteo.
     providers_used = ["Open-Meteo (ECMWF)"]
     source_label = "open-meteo"
     fusion_meta: dict[str, Any] = {}
@@ -181,7 +304,6 @@ def _build_weather_snapshot(lat: float, lon: float, language: str) -> dict[str, 
     except Exception as fuse_err:
         print(f"[mobile /weather] fusion skipped: {fuse_err}")
 
-    # Defensive normalization keeps malformed upstream values from reaching clients.
     temp_c = _bounded(temp_c, -100, 70)
     feels_c = _bounded(feels_c, -100, 80)
     humidity = _bounded(humidity, 0, 100)
@@ -216,6 +338,10 @@ def _build_weather_snapshot(lat: float, lon: float, language: str) -> dict[str, 
         "providers_used": providers_used,
         "fusion": fusion_meta,
         "fetched_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "requested_source": source,
+        "selection_policy_version": "1.0.0",
+        "fallback_reasons": selection.fallback_reasons if 'selection' in locals() else [],
+        "mode": mode,
     }
 
 
@@ -228,6 +354,8 @@ async def get_advisory(
     growth_stage: str = Query("", description="Optional crop growth stage (e.g. Flowering)"),
     soil: str = Query("", description="Optional soil type"),
     irrigation: str = Query("", description="Optional irrigation type"),
+    source: str = Query("auto", description="Forecast source"),
+    mode: str = Query("farmer", description="Mode for advisory"),
 ) -> dict[str, Any]:
     """Simple farm action-window style advisory for mobile farmer mode.
 
@@ -236,25 +364,70 @@ async def get_advisory(
     and may make days/hours *more* conservative with high-confidence answers.
     The response carries additive ``ai``/``hourly`` fields plus an
     ``advisory_engine`` label; older clients ignore them.
+
+    Fixed: heat handling uses worst-band merging, not unconditional caution.
     """
-    data = await run_in_threadpool(
-        _get_json,
-        FORECAST_URL,
-        {
-            "latitude": lat,
-            "longitude": lon,
-            "daily": (
-                "temperature_2m_max,temperature_2m_min,precipitation_probability_max,"
-                "rain_sum,wind_speed_10m_max,weather_code"
-            ),
-            "hourly": (
-                "temperature_2m,precipitation_probability,precipitation,"
-                "wind_speed_10m,weather_code"
-            ),
-            "forecast_days": days,
-            "timezone": "auto",
-        },
-    )
+    # Use forecast service for data
+    def _fetch_forecast():
+        service = get_forecast_service()
+        result = service.select_forecast(
+            lat=lat,
+            lon=lon,
+            product="forecast",
+            requested_source=source,
+            mode=mode,
+            forecast_days=days,
+        )
+        return result
+
+    forecast_result = await run_in_threadpool(_fetch_forecast)
+
+    # If forecast service failed, fallback to direct Open-Meteo
+    if not forecast_result.forecast:
+        data = await run_in_threadpool(
+            _get_json,
+            FORECAST_URL,
+            {
+                "latitude": lat,
+                "longitude": lon,
+                "daily": (
+                    "temperature_2m_max,temperature_2m_min,precipitation_probability_max,"
+                    "rain_sum,wind_speed_10m_max,weather_code"
+                ),
+                "hourly": (
+                    "temperature_2m,precipitation_probability,precipitation,"
+                    "wind_speed_10m,weather_code"
+                ),
+                "forecast_days": days,
+                "timezone": "auto",
+            },
+        )
+    else:
+        # Build data structure compatible with existing advisory code from normalized forecast
+        fc = forecast_result.forecast
+        # Map to old structure
+        daily_time = [d.get("date") for d in fc.daily]
+        daily_data = {
+            "time": daily_time,
+            "temperature_2m_max": [d.get("high_c") for d in fc.daily],
+            "temperature_2m_min": [d.get("low_c") for d in fc.daily],
+            "precipitation_probability_max": [d.get("rain_probability") for d in fc.daily],
+            "rain_sum": [d.get("rain_mm") for d in fc.daily],
+            "wind_speed_10m_max": [d.get("wind_kmh_max") or d.get("wind_max") or 0 for d in fc.daily],
+            "weather_code": [d.get("weather_code") or 0 for d in fc.daily],
+        }
+        # Hourly
+        hourly_time = [p.time_utc.isoformat() for p in fc.hourly]
+        hourly_data = {
+            "time": hourly_time,
+            "temperature_2m": [p.temperature_c for p in fc.hourly],
+            "precipitation_probability": [p.precipitation_probability for p in fc.hourly],
+            "precipitation": [p.precipitation_mm for p in fc.hourly],
+            "wind_speed_10m": [p.wind_speed_kmh for p in fc.hourly],
+            "weather_code": [p.weather_code or 0 for p in fc.hourly],
+        }
+        data = {"daily": daily_data, "hourly": hourly_data}
+
     daily = data.get("daily") or {}
     dates = daily.get("time") or []
     rain_probs = daily.get("precipitation_probability_max") or []
@@ -269,22 +442,39 @@ async def get_advisory(
         wind = wind_max[i] if i < len(wind_max) else 0
         high = highs[i] if i < len(highs) else None
 
+        # Fixed: use worst-band merging, not unconditional override
+        # Start with good, then apply worst of rain, wind, heat
+        suitability = "good"
+        notes = []
+        best = "Best: 6–10 AM"
+
+        # Rain check
         if rp >= 70 or (isinstance(rs, (int, float)) and rs >= 10):
-            suitability = "poor"
-            note = "Heavy rain likely — avoid spraying and limit field work."
-            best = "Indoor / planning tasks"
+            suitability = advisory_ai.worse(suitability, "poor")
+            notes.append("Heavy rain likely")
         elif rp >= 40 or (isinstance(wind, (int, float)) and wind >= 25):
-            suitability = "caution"
-            note = "Workable with caution — watch wind and showers."
-            best = "Plan for afternoon gaps"
+            suitability = advisory_ai.worse(suitability, "caution")
+            notes.append("Watch wind and showers")
+
+        # Heat check - use worse merging, not unconditional
+        if high is not None and high >= 40:
+            suitability = advisory_ai.worse(suitability, "caution")
+            notes.append("Heat stress risk")
+
+        # Determine summary based on final suitability (worst)
+        if suitability == "poor":
+            note = "Heavy rain likely — avoid spraying and limit field work." if "Heavy rain" in " ".join(notes) else "Conditions unsafe — avoid spraying and limit field work."
+            best = "Indoor / planning tasks"
+        elif suitability == "caution":
+            if "Heat stress" in " ".join(notes):
+                note = "Heat stress risk — irrigate early morning or evening."
+                best = "Avoid midday field work"
+            else:
+                note = "Workable with caution — watch wind and showers."
+                best = "Plan for afternoon gaps"
         else:
-            suitability = "good"
             note = "Good day for field work."
             best = "Best: 6–10 AM"
-        if high is not None and high >= 40:
-            suitability = "caution"
-            note = "Heat stress risk — irrigate early morning or evening."
-            best = "Avoid midday field work"
 
         windows.append(
             {
@@ -296,32 +486,31 @@ async def get_advisory(
                 "rain_mm": rs,
                 "wind_kmh_max": wind,
                 "high_c": high,
+                "reasons": notes,
             }
         )
 
     crop_label = crop.strip() or "general crops"
 
-    # Hourly activity bands (transparent thresholds) for the first two days —
-    # the app's action-window bars render these directly.
+    # Hourly activity bands for first two days
     hourly_by_date = advisory_ai.build_hourly_by_date((data.get("hourly") or {}), dates)
     for window in windows[:2]:
         window["hourly"] = hourly_by_date.get(str(window.get("date"))) or {}
 
-    # TypeSafe composite-scoring overlay: one batched call for all days.
+    # TypeSafe overlay
     ai_meta: dict[str, Any] = {"enabled": False, "applied": False, "model": None}
     if windows and typesafe.is_enabled():
         stats = [advisory_ai.daily_stats(data.get("hourly") or {}, str(d)) for d in dates]
+        # Generate evidence IDs
+        evidence_ids = [f"ev_{d}_{lat:.2f}_{lon:.2f}" for d in dates]
         state_text = advisory_ai.build_state(
             crop_label, lat, lon, dates, stats,
-            farm={
-                "growth_stage": growth_stage,
-                "soil": soil,
-                "irrigation": irrigation,
-            },
+            farm={"growth_stage": growth_stage, "soil": soil, "irrigation": irrigation},
+            evidence_ids=evidence_ids,
         )
         result = typesafe.evaluate(
             state_text,
-            advisory_ai.build_questions(dates),
+            advisory_ai.build_questions(dates, evidence_ids=evidence_ids),
             timeout=float(os.getenv("TYPESAFE_ADVISORY_TIMEOUT_SECONDS", "6")),
             label="advisory",
         )
@@ -347,7 +536,11 @@ async def get_advisory(
         "windows": windows,
         "advisory_engine": "system-one+thresholds" if ai_meta.get("applied") else "thresholds",
         "ai": ai_meta,
-        "source": "open-meteo",
+        "source": forecast_result.selected_source.value if 'forecast_result' in locals() and forecast_result.forecast else "open-meteo",
+        "requested_source": source,
+        "fallback_reasons": forecast_result.fallback_reasons if 'forecast_result' in locals() else [],
+        "provenance": forecast_result.forecast.provenance.to_dict() if 'forecast_result' in locals() and forecast_result.forecast else None,
+        "mode": mode,
     }
 
 
@@ -377,7 +570,6 @@ async def get_historical(
             detail="metric must be one of: rainfall, temperature, humidity",
         )
 
-    # Open-Meteo archive — request full range then aggregate by year server-side
     data = await run_in_threadpool(
         _get_json,
         ARCHIVE_URL,
@@ -448,8 +640,6 @@ async def get_comparison(
             lat_f, lon_f = float(lat_s), float(lon_s)
         except (TypeError, ValueError):
             continue
-        # Validate parsed coordinates here too: this route calls the handler directly,
-        # so FastAPI's Query constraints on /historical do not run automatically.
         if not (-90 <= lat_f <= 90 and -180 <= lon_f <= 180):
             continue
         hist = await get_historical(

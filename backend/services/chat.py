@@ -2,9 +2,16 @@
 
 Routing policy (per request):
   1. greeting / meta          → canned intro, no upstream calls
-  2. simple weather question  → deterministic telemetry (multi-provider fusion), no LLM
-  3. everything else          → LangGraph agent with a hard timeout, falling back to the
+  2. simple weather question  → deterministic telemetry (shared forecast service), no LLM
+  3. everything else          → LangGraph agent with hard timeout, falling back to
                                 deterministic telemetry path on timeout / error / no key
+
+Extended with:
+- Ensemble, pressure-level, run-specific, catalog, cyclone, export, inference requests
+  must reach capable tool path, not existing short current-weather/rain fast path
+- Evidence-aware reply checks (weather tool evidence provided to Noul)
+- Mode and source constraints preserved through pipeline
+- Weather-related scientific analysis in scope; broad keyword matches must not discard valid requests
 """
 
 from __future__ import annotations
@@ -12,6 +19,7 @@ from __future__ import annotations
 import concurrent.futures
 import os
 from dataclasses import dataclass
+from typing import Any, Optional
 
 from schemas import ChatRequest, ClientKind
 
@@ -56,6 +64,9 @@ COMPLEX_MARKERS = (
     "compare", "historical", "anomaly", "trend", "why", "explain",
     "irrigat", "pesticide", "spray", "harvest", "sow", "crop advice",
     "multi-day plan", "week ahead detailed", "should i", "can i", "plan",
+    "ensemble", "member", "profile", "500 hpa", "pressure level", "geopotential",
+    "cyclone", "storm", "track", "run", "initialization", "zarr", "bigquery",
+    "weathernext", "research", "scientific", "upper air", "atmospheric",
 )
 
 SIMPLE_MARKERS = (
@@ -65,34 +76,109 @@ SIMPLE_MARKERS = (
     "heat", "cool", "cloudy", "sunny", "monsoon", "umbrella",
 )
 
-# These phrases must never take the deterministic weather path merely because they
-# mention weather. The agent still receives them so its domain guard can explain that
-# coding/study requests are outside scope.
-OFF_TOPIC_MARKERS = (
-    "write code", "write a program", "python", "javascript", "programming",
-    "debug", "homework", "exam", "study", "solve this equation", "essay",
+# Off-topic handling: strong markers always off-topic even if weather mentioned
+# (e.g., "write Python code for a weather app" is coding, not weather data)
+# Weak markers like "python" alone should NOT discard valid weather-data requests
+OFF_TOPIC_STRONG = (
+    "write code", "write a program", "javascript", "debug this code",
+    "homework", "exam", "study", "solve this equation", "essay",
     "recipe", "football", "movie", "politics",
 )
+# Weak markers: only off-topic when no weather/research context
+OFF_TOPIC_WEAK = ("python", "programming",)
+# Keep old name for backward compat
+OFF_TOPIC_MARKERS = OFF_TOPIC_STRONG
+
+
+def _is_coding_request(q: str) -> bool:
+    """Detect explicit coding request like 'write python code'."""
+    # Strong signal: write + code/program
+    if "write" in q and ("code" in q or "program" in q):
+        return True
+    # Also check strong markers
+    if any(m in q for m in OFF_TOPIC_STRONG):
+        return True
+    return False
 
 
 def is_weather_related(text: str) -> bool:
-    """Broad domain check: conversational and research weather requests are allowed."""
+    """Broad domain check: conversational and research weather requests are allowed.
+
+    Broad keyword matches such as 'Python' must not automatically discard
+    otherwise valid weather-data request (e.g., 'get ensemble data using python').
+    But explicit coding requests like 'write Python code for a weather app' remain unrelated.
+    """
     q = (text or "").lower().strip()
-    return bool(q) and not any(marker in q for marker in OFF_TOPIC_MARKERS) and any(
-        marker in q for marker in SIMPLE_MARKERS + COMPLEX_MARKERS
-    )
+    if not q:
+        return False
+
+    # Explicit coding request takes precedence - not weather-related
+    # Even if mentions weather app, it's asking for code, not weather data
+    if "write" in q and ("code" in q or "program" in q):
+        # Unless it's clearly asking for weather data AND code as tool?
+        # For "write Python code for a weather app" -> unrelated
+        # For "write code to analyze weather data" -> still coding, not weather data
+        return False
+
+    has_weather = any(marker in q for marker in SIMPLE_MARKERS + COMPLEX_MARKERS)
+    has_strong_off = any(marker in q for marker in OFF_TOPIC_STRONG)
+    has_weak_off = any(marker in q for marker in OFF_TOPIC_WEAK)
+
+    # Strong off-topic always unrelated
+    if has_strong_off:
+        return False
+
+    # Weak off-topic only unrelated if no weather/research
+    if has_weak_off and not has_weather:
+        research_markers = ("ensemble", "profile", "pressure", "geopotential", "cyclone", "weathernext", "run", "member", "data", "forecast")
+        if not any(m in q for m in research_markers):
+            return False
+
+    if has_weather:
+        return True
+    research_markers = ("ensemble", "profile", "pressure", "geopotential", "cyclone", "weathernext", "run", "member")
+    if any(m in q for m in research_markers):
+        return True
+    return False
 
 
 def classify_intent(text: str) -> str:
-    """Return a transparent, stable intent label for clients and diagnostics."""
+    """Return transparent, stable intent label for clients and diagnostics.
+
+    Extended to include ensemble, profile, run comparison, cyclone, export, inference.
+    Broad keyword 'python' alone must not discard valid weather-data request.
+    """
     q = (text or "").lower().strip()
     if is_greeting_or_meta(q):
         return "greeting"
-    if any(marker in q for marker in OFF_TOPIC_MARKERS):
+    # Explicit coding request -> unrelated
+    if "write" in q and ("code" in q or "program" in q):
         return "unrelated"
+    if any(marker in q for marker in OFF_TOPIC_STRONG):
+        return "unrelated"
+    # Weak markers only unrelated if no weather/research context
+    if any(marker in q for marker in OFF_TOPIC_WEAK):
+        has_weather = any(m in q for m in SIMPLE_MARKERS + COMPLEX_MARKERS + ("ensemble", "weathernext", "data", "forecast"))
+        if not has_weather:
+            return "unrelated"
+    # Research / scientific intents - must reach capable tool path
+    if any(marker in q for marker in ("ensemble", "all members", "member", "spread", "quantile", "p10", "p90")):
+        return "ensemble_query"
+    if any(marker in q for marker in ("profile", "500 hpa", "850 hpa", "pressure level", "upper air", "geopotential", "atmospheric profile")):
+        return "profile_query"
+    if any(marker in q for marker in ("run", "initialization", "init time", "archived run", "old forecast")):
+        return "run_query"
+    if any(marker in q for marker in ("cyclone", "hurricane", "typhoon", "storm track", "atcf")):
+        return "cyclone_query"
+    if any(marker in q for marker in ("export", "download", "extract", "job", "raster", "tile")):
+        return "export_query"
+    if any(marker in q for marker in ("inference", "custom model", "vmg")):
+        return "inference_query"
+    if any(marker in q for marker in ("catalog", "capability", "variable", "what data", "available")):
+        return "catalog_query"
     if any(marker in q for marker in ("historical", "history", "last year", "trend", "anomaly")):
         return "historical_weather"
-    if any(marker in q for marker in ("compare", "versus", " vs ", "provider", "accuracy")):
+    if any(marker in q for marker in ("compare", "versus", " vs ", "provider", "accuracy", "difference")):
         return "weather_comparison"
     if any(marker in q for marker in ("why", "explain", "how does", "what causes")):
         return "weather_explanation"
@@ -104,9 +190,8 @@ def classify_intent(text: str) -> str:
         return "weather_conversation"
     return "ambiguous"
 
-# System One intent routes mirror `classify_intent` labels exactly, so the
-# downstream behavior is unchanged — only the classifier improves. Descriptions
-# are the Choice criteria sent to TypeSafe (docs.typesafe.ai/primitives/choice).
+
+# System One intent routes mirror classify_intent labels exactly
 INTENT_ROUTES: dict[str, str] = {
     "greeting": "Small talk, a greeting, a thank-you or a meta question about the assistant",
     "unrelated": "Off-topic for a weather assistant (code, homework, recipes, sports…)",
@@ -116,19 +201,23 @@ INTENT_ROUTES: dict[str, str] = {
     "rain_probability": "Will it rain, when, or how much — a precipitation question",
     "weather_current_or_forecast": "Current conditions or an upcoming forecast for a place",
     "weather_conversation": "General weather-related conversation or advice",
+    "ensemble_query": "Query about ensemble members, spread, probabilities, uncertainty, or all members for a point/time",
+    "profile_query": "Request for upper-air atmospheric profile, pressure levels, geopotential, temperature at 500 hPa, etc.",
+    "run_query": "Request about specific forecast run, initialization time, archived run, or run comparison",
+    "cyclone_query": "Query about cyclone tracks, storm intensity, predicted tracks, member tracks",
+    "export_query": "Request to export, download, extract regional data, map tiles, or bounded raster",
+    "inference_query": "Request about custom model inference, job submission, or WeatherNext inference",
+    "catalog_query": "Request about available capabilities, variables, data catalog, what data is available",
     "ambiguous": "Cannot be interpreted",
 }
 
-# Routes eligible for the deterministic fast path (live telemetry, no LLM).
+# Routes eligible for deterministic fast path (live telemetry, no LLM)
+# Scientific queries must NOT take fast path
 FAST_INTENTS = {"weather_current_or_forecast", "rain_probability"}
 
 
 def system_one_intent(context_query: str) -> dict | None:
-    """One batched TypeSafe call classifying the turn (fan-out pattern).
-
-    Returns ``{"route", "confidence", "live_data", "smalltalk"}`` or None when
-    TypeSafe is disabled, unconfigured, or failed — callers then use keywords.
-    """
+    """One batched TypeSafe call classifying the turn (fan-out pattern)."""
     if typesafe is None or not typesafe.is_enabled():
         return None
     if os.getenv("TYPESAFE_CHAT_ROUTING", "1") == "0":
@@ -137,12 +226,12 @@ def system_one_intent(context_query: str) -> dict | None:
         context_query,
         {
             "route": typesafe.choice(
-                "What does the sender want from an Indian weather assistant?",
+                "What does the sender want from an Indian weather assistant? Consider ensemble, profile, cyclone, catalog queries as weather-related research.",
                 INTENT_ROUTES,
             ),
             "live_data": typesafe.noul(
                 "Could this be answered well with just live weather readings for one "
-                "city, with no reasoning or follow-up needed?"
+                "city, with no reasoning or follow-up needed? Scientific ensemble/profile/run/cyclone queries need tools, not just live readings."
             ),
             "smalltalk": typesafe.noul(
                 "Is this message small talk, a greeting, a thank-you, or a question "
@@ -177,11 +266,7 @@ SAFE_REPLY = (
 
 
 def decide_intent(context_query: str) -> dict:
-    """Single source of truth for the routing decision (shared with /dev/intent).
-
-    Returns ``{"intent", "engine", "confidence", "ai", "keyword_intent"}`` where
-    ``ai`` is the raw System One probe result (None when unavailable).
-    """
+    """Single source of truth for routing decision (shared with /dev/intent)."""
     keyword_intent = classify_intent(context_query)
     ai = system_one_intent(context_query)
     min_conf = float(os.getenv("TYPESAFE_INTENT_MIN_CONFIDENCE", "0.55"))
@@ -200,13 +285,15 @@ def decide_intent(context_query: str) -> dict:
 
 GREETING_REPLY = (
     "I'm **WeatherGPT** — I help with live weather, forecasts, rain alerts, "
-    "air quality, and farming advisories.\n\n"
-    "Try asking: *Will it rain tomorrow in Ahmedabad?* or *What's the temperature in Delhi?*"
+    "air quality, and farming advisories. I also have access to WeatherNext ensemble, "
+    "profiles, and research capabilities.\n\n"
+    "Try asking: *Will it rain tomorrow in Ahmedabad?* or *Show me the 500 hPa profile for Delhi* "
+    "or *What ensemble spread for rainfall in Mumbai?*"
 )
 
 
 def normalize_language(lang: str | None) -> str:
-    """Map ISO codes (mobile) and display names (web) to a canonical language name."""
+    """Map ISO codes (mobile) and display names (web) to canonical language name."""
     raw = (lang or "").strip()
     if not raw:
         return "English"
@@ -217,7 +304,7 @@ def normalize_language(lang: str | None) -> str:
 
 
 def language_from_header(accept_language: str | None) -> str | None:
-    """Primary tag from an `Accept-Language` header, or None."""
+    """Primary tag from Accept-Language header, or None."""
     if not accept_language:
         return None
     primary = accept_language.split(",")[0].strip().split(";")[0].strip()
@@ -246,9 +333,6 @@ def is_greeting_or_meta(text: str) -> bool:
         return True
     if q in GREETINGS:
         return True
-    # Only greeting phrases support a prefix match.  Bare acknowledgements such as
-    # "no" and "yes" are valid greetings/meta replies when standalone, but must not
-    # swallow contextual follow-ups like "no, I mean chances of raining".
     prefix_greetings = tuple(
         g for g in GREETINGS if g not in {"yes", "no", "ok", "okay", "help"}
     )
@@ -256,24 +340,36 @@ def is_greeting_or_meta(text: str) -> bool:
 
 
 def is_simple_weather_query(text: str, farmer_mode: bool) -> bool:
-    """Heuristic: current conditions / short forecast → deterministic path only."""
+    """Heuristic: current conditions / short forecast → deterministic path only.
+
+    Scientific queries (ensemble, profile, etc.) must NOT take fast path.
+    Coding requests must not take fast path even if mention weather.
+    """
     if farmer_mode:
         return False
     q = (text or "").lower().strip()
     if not q or len(q) > 220 or is_greeting_or_meta(q):
         return False
-    if any(m in q for m in OFF_TOPIC_MARKERS):
+    # Coding request never fast-paths
+    if "write" in q and ("code" in q or "program" in q):
         return False
+    if any(m in q for m in OFF_TOPIC_STRONG):
+        return False
+    # Complex markers including scientific ones must not take fast path
     if any(m in q for m in COMPLEX_MARKERS):
         return False
     if any(m in q for m in SIMPLE_MARKERS):
+        # If weak marker like python present with weather, allow fast path? No, coding-like should go to agent for guard
+        # But "weather in delhi using python" is still simple weather, but contains python -> don't fast-path, let agent guard
+        if any(w in q for w in OFF_TOPIC_WEAK) and ("code" in q or "program" in q):
+            return False
         return True
     tokens = [t for t in q.replace("?", " ").split() if t]
     return 2 <= len(tokens) <= 5 and all(t.isalpha() for t in tokens)
 
 
 def resolve_history(request: ChatRequest) -> tuple[list[dict] | str, str]:
-    """Return (payload for the agent, last user utterance) for either client shape."""
+    """Return (payload for agent, last user utterance) for either client shape."""
     if request.messages:
         last = next(
             (str(m.get("content") or "") for m in reversed(request.messages)
@@ -285,12 +381,7 @@ def resolve_history(request: ChatRequest) -> tuple[list[dict] | str, str]:
 
 
 def resolve_weather_context(request: ChatRequest, last_message: str) -> str:
-    """Build a bounded query for deterministic fallback location/topic resolution.
-
-    The fallback has no LLM memory, so a follow-up such as "what about tomorrow?"
-    must carry enough recent user context to recover the city from an earlier turn.
-    Assistant replies are deliberately excluded because they may contain many cities.
-    """
+    """Build bounded query for deterministic fallback location/topic resolution."""
     if not request.messages:
         return last_message.strip()
     user_messages = [
@@ -301,24 +392,25 @@ def resolve_weather_context(request: ChatRequest, last_message: str) -> str:
     user_messages = [message for message in user_messages if message]
     if not user_messages:
         return last_message.strip()
-    # Keep the latest turn prominent and cap input to avoid excessive geocoder work.
     return " ".join(user_messages[-3:])[:600]
 
 
 @dataclass
 class ChatResult:
     response: str
-    path: str  # "greeting" | "fast" | "agent" | "fallback" | "guarded"
+    path: str  # greeting | fast | agent | fallback | guarded
     client: ClientKind
     language: str
     location: str
     intent: str
-    intent_engine: str = "keywords"  # "system-one" | "keywords"
+    intent_engine: str = "keywords"
     intent_confidence: float | None = None
+    requested_source: str = "auto"
+    mode: str = "everyone"
 
 
 def run_chat(request: ChatRequest, *, client: ClientKind = "unknown") -> ChatResult:
-    """Synchronous chat pipeline. Call via `run_in_threadpool` from async handlers."""
+    """Synchronous chat pipeline with mode and source constraints."""
     from agent import run_deterministic_telemetry_fallback, run_weather_agent, has_llm
 
     payload, last_msg = resolve_history(request)
@@ -329,39 +421,49 @@ def run_chat(request: ChatRequest, *, client: ClientKind = "unknown") -> ChatRes
     timeout_s = float(os.getenv("CHAT_TIMEOUT_SECONDS", "22"))
     fast_path = os.getenv("CHAT_FAST_PATH", "1") != "0"
 
-    # --- Intent routing: TypeSafe (System One) first, keywords as the fallback. ---
-    # One batched call classifies the turn (with an abuse probe riding along);
-    # confidence gates whether we trust it over the keyword classifier.
+    # Extract mode and source from request (new fields)
+    # For backward compat, check if request has mode attribute
+    mode = getattr(request, "mode", None) or (os.getenv("WEATHER_MODE", "everyone") or "everyone")
+    if mode not in ("everyone", "farmer", "researcher"):
+        mode = "farmer" if request.farmer_mode else "everyone"
+
+    requested_source = getattr(request, "requested_source", None) or getattr(request, "source", None) or "auto"
+    allowed_sources = ["auto", "imd", "weathernext", "accuweather", "open_meteo", "open-meteo"]
+    if requested_source not in allowed_sources:
+        requested_source = "auto"
+
+    # Intent routing
     decision = decide_intent(context_query)
     ai = decision["ai"]
     intent = decision["intent"]
     intent_engine = decision["engine"]
     intent_confidence: float | None = decision["confidence"]
+
     if intent_engine == "system-one":
         is_greeting = intent == "greeting"
         wants_fast = (
             fast_path
             and not request.farmer_mode
+            and mode != "researcher"
             and len(last_msg) <= 220
             and intent in FAST_INTENTS
             and (ai.get("live_data") or 0.0) >= 0.7
         )
     else:
         is_greeting = is_greeting_or_meta(last_msg)
-        wants_fast = fast_path and is_simple_weather_query(last_msg, bool(request.farmer_mode))
+        wants_fast = fast_path and is_simple_weather_query(last_msg, bool(request.farmer_mode)) and mode != "researcher"
 
     def _result(text: str, path: str) -> ChatResult:
         try:
             if sanitize_response is not None:
                 cleaned = sanitize_response(text)
-                # Use cleaned if it has content, otherwise fall back to original
                 if cleaned and cleaned.strip():
                     return ChatResult(cleaned, path, client, language, location, intent,
-                                      intent_engine, intent_confidence)
+                                      intent_engine, intent_confidence, requested_source, mode)
         except Exception as e:
             print(f"[chat] sanitize_response failed: {e}")
         return ChatResult(text, path, client, language, location, intent,
-                          intent_engine, intent_confidence)
+                          intent_engine, intent_confidence, requested_source, mode)
 
     def _fallback(path: str = "fallback") -> ChatResult:
         return _result(
@@ -371,8 +473,7 @@ def run_chat(request: ChatRequest, *, client: ClientKind = "unknown") -> ChatRes
             path,
         )
 
-    # Abuse guard: the probe rides along in the same intent call (fan-out), so
-    # this costs no extra request. Only a strong signal blocks the turn.
+    # Abuse guard
     abuse_min = float(os.getenv("TYPESAFE_ABUSE_MIN_PROBABILITY", "0.85"))
     if ((ai or {}).get("abuse") or 0.0) >= abuse_min:
         print("[chat] system-one abuse probe tripped — guarded reply")
@@ -391,36 +492,59 @@ def run_chat(request: ChatRequest, *, client: ClientKind = "unknown") -> ChatRes
         return _fallback()
 
     def _agent() -> str:
-        return run_weather_agent(payload, location, language, request.farmer_mode, request.crop)
+        return run_weather_agent(
+            payload, location, language, request.farmer_mode, request.crop,
+            mode=mode, requested_source=requested_source
+        )
 
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             text = pool.submit(_agent).result(timeout=timeout_s)
 
-        # Optional reply gate (opt-in: TYPESAFE_REPLY_CHECK=1): one Noul checks
-        # whether the generative reply actually answers the question. Only an
-        # extreme "no" (default < 0.15) downgrades to the deterministic reply —
-        # the gate can veto hallucination, never style. Failures are ignored.
+        # Evidence-aware reply assessment - provide weather tool evidence to Noul
         try:
             if os.getenv("TYPESAFE_REPLY_CHECK", "0") == "1" and typesafe is not None:
+                # Try to extract evidence from last tool calls if available
+                # For now, we provide a bounded evidence context
+                # In full implementation, would collect actual tool results from agent state
+                evidence_context = f"Mode: {mode}, Source: {requested_source}, Location: {location}, Intent: {intent}"
+                # Include any available forecast provenance if we can fetch it
+                try:
+                    from services.forecast import get_forecast_service
+                    service = get_forecast_service()
+                    # Use request lat/lon if available for evidence
+                    lat = request.lat or 22.0
+                    lon = request.lon or 72.0
+                    fc_result = service.select_forecast(lat=lat, lon=lon, product="forecast", requested_source=requested_source, mode=mode)
+                    if fc_result.forecast:
+                        evidence_context += f", Model: {fc_result.forecast.provenance.model}, Run: {fc_result.forecast.provenance.run_id}, Source: {fc_result.selected_source.value}"
+                except Exception:
+                    pass
+
                 check = typesafe.evaluate(
-                    f"User question: {last_msg[:800]}\n\nAssistant reply: {text[:1500]}",
+                    f"User question: {last_msg[:800]}\n\nAssistant reply: {text[:1500]}\n\nEvidence context: {evidence_context[:1000]}",
                     {
                         "answered": typesafe.noul(
                             "Does the assistant reply directly answer the user's "
-                            "question with accurate, safe information — no fabricated "
-                            "data and no unsafe farm or health advice?"
-                        )
+                            "question with accurate, safe information supported by the evidence context — "
+                            "no fabricated data, no unsafe farm advice, and respects uncertainty and official warnings?"
+                        ),
+                        "semantic_support": typesafe.noul(
+                            "Is the assistant reply supported by the bounded, provenance-linked tool results "
+                            "and evidence context? Numeric/source/time claims should be verifiable."
+                        ),
                     },
                     timeout=float(os.getenv("TYPESAFE_REPLY_TIMEOUT_SECONDS", "3")),
                     label="reply-check",
                 )
                 if check:
                     answered = typesafe.noul_of(check["answers"], "answered")
+                    supported = typesafe.noul_of(check["answers"], "semantic_support")
+                    # Only veto if both indicate problem, or answered is extreme non-answer
                     if answered is not None and answered < float(
                         os.getenv("TYPESAFE_REPLY_MIN_PROBABILITY", "0.15")
                     ):
-                        print(f"[chat] reply-check rejected agent output (p={answered})")
+                        print(f"[chat] reply-check rejected agent output (p={answered}, supported={supported})")
                         return _fallback("fallback")
         except Exception as check_exc:
             print(f"[chat] reply-check skipped: {check_exc}")

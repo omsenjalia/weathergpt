@@ -1,4 +1,10 @@
-"""Health, diagnostics, sandbox and fusion-inspector endpoints (web Dev Suite + uptime probes)."""
+"""Health, diagnostics, sandbox and fusion-inspector endpoints (web Dev Suite + uptime probes).
+
+Extended with:
+- Source health, latest complete runs, freshness/coverage, fallback reasons, cache/query-cost diagnostics
+- Decision platform health
+- WeatherNext connectivity checks (admin-only, no secrets)
+"""
 
 from __future__ import annotations
 
@@ -15,6 +21,12 @@ from fastapi.responses import JSONResponse
 from schemas import SandboxRequest
 from services import typesafe
 from services.fusion import PROVIDER_WEIGHTS, configured_providers, fuse_current_weather
+from services.config import get_config
+from services.weathernext_auth import get_credentials_factory_status, check_connectivity
+from services.forecast import get_forecast_service
+from services.forecast_cache import get_cache as get_forecast_cache
+from services.decisions.audit import get_decision_cache_stats, get_audit_stats
+from services.weathernext_catalog import get_catalog
 from state import RECENT_LOGS, START_DATETIME, START_TIME
 
 try:
@@ -40,9 +52,8 @@ async def fusion_inspector(
 ):
     """Server-side ensemble fusion for the given coordinates.
 
-    Exposes per-provider readings, trust weights, outlier flags and the fused result so the
-    web Dev Suite "Ensemble Inspector" and the mobile app can show the same numbers without
-    shipping vendor API keys to the client.
+    Legacy diagnostic: per-provider readings, trust weights, outlier flags.
+    New provider chain is at /v2/weather/health and /v2/weather?source=auto.
     """
     fused = await run_in_threadpool(fuse_current_weather, lat, lon)
     if fused.get("error"):
@@ -50,10 +61,84 @@ async def fusion_inspector(
     return {
         "lat": lat,
         "lon": lon,
-        "priority": ["Open-Meteo (ECMWF)", "AccuWeather", "WeatherAPI.com", "Tomorrow.io", "OpenWeatherMap"],
+        "priority_legacy": ["Open-Meteo (ECMWF)", "AccuWeather", "WeatherAPI.com", "Tomorrow.io", "OpenWeatherMap"],
+        "priority_new": get_config().provider_priority,
         "configured_providers": configured_providers(),
         **fused,
     }
+
+
+@router.get("/dev/weathernext")
+async def dev_weathernext_health():
+    """WeatherNext connectivity check - admin diagnostics without credentials."""
+    def _check():
+        return {
+            "auth": get_credentials_factory_status(),
+            "connectivity": check_connectivity(),
+            "catalog_coverage": get_catalog().coverage_report(),
+            "config": {
+                "enabled": get_config().weathernext.enabled,
+                "auth_mode": get_config().weathernext.auth_mode,
+                "surface": get_config().weathernext.surface,
+                "provider_priority": get_config().provider_priority,
+            },
+        }
+    return await run_in_threadpool(_check)
+
+
+@router.get("/dev/forecast")
+async def dev_forecast_health(
+    lat: float = Query(22.0, description="Sample lat"),
+    lon: float = Query(72.0, description="Sample lon"),
+):
+    """Source health, latest complete runs, freshness/coverage, fallback reasons, cache diagnostics."""
+    def _check():
+        service = get_forecast_service()
+        cache = get_forecast_cache()
+        result = service.select_forecast(lat=lat, lon=lon, product="forecast", requested_source="auto", mode="everyone")
+        return {
+            "sample_location": {"lat": lat, "lon": lon},
+            "selection": {
+                "selected_source": result.selected_source.value,
+                "requested_source": result.requested_source,
+                "fallback_reasons": result.fallback_reasons,
+                "tried_providers": result.tried_providers,
+                "is_stale": result.is_stale,
+                "latency_ms": result.latency_ms,
+                "error": result.error,
+                "has_forecast": result.forecast is not None,
+                "provenance": result.forecast.provenance.to_dict() if result.forecast else None,
+            },
+            "provider_health": {
+                name.value: {
+                    "configured": provider.is_configured(),
+                    "consecutive_failures": provider._consecutive_failures,
+                    "circuit_breaker": provider.should_circuit_break(),
+                }
+                for name, provider in service.providers.items()
+            },
+            "cache": cache.stats(),
+            "generated_at": datetime.now().isoformat(),
+        }
+    return await run_in_threadpool(_check)
+
+
+@router.get("/dev/decisions")
+async def dev_decisions_health():
+    """Protected decision inspector, shadow comparison and redacted failure counters."""
+    def _check():
+        return {
+            "cache_and_audit": get_decision_cache_stats(),
+            "audit_stats": get_audit_stats(),
+            "config": {
+                "weathernext_mode": get_config().jev.weathernext_mode,
+                "enabled_features": get_config().jev.decision_features,
+                "total_budget_ms": get_config().jev.total_budget_ms,
+                "max_calls_per_request": get_config().jev.max_calls_per_request,
+            },
+            "generated_at": datetime.now().isoformat(),
+        }
+    return await run_in_threadpool(_check)
 
 
 @router.post("/dev/sandbox")
@@ -98,13 +183,7 @@ async def dev_intent(
         description="Sample user message to classify",
     ),
 ) -> dict:
-    """Chat-routing decision inspector: keyword classifier vs TypeSafe System One.
-
-    Runs the exact same `decide_intent` as `/chat` and shows both engines'
-    answers, the full System One probability distribution, which engine wins,
-    and whether the message would take the deterministic fast path. Offline
-    diagnostics: without a TYPESAFE_API_KEY the System One block is null.
-    """
+    """Chat-routing decision inspector: keyword classifier vs TypeSafe System One."""
     from services.chat import FAST_INTENTS, decide_intent, is_simple_weather_query
 
     started = time.perf_counter()
@@ -166,6 +245,8 @@ async def dev_diagnostics(http_request: Request):
     def _has(*names: str) -> bool:
         return any(os.getenv(n) and not os.getenv(n, "").startswith("your_") for n in names)
 
+    cfg = get_config()
+
     return {
         "status": "ok",
         "timestamp": datetime.now().isoformat(),
@@ -183,9 +264,10 @@ async def dev_diagnostics(http_request: Request):
         "ai_decisions": {
             "typesafe_enabled": typesafe.is_enabled(),
             "typesafe_model": typesafe.model_name() if typesafe.is_enabled() else None,
-            "chat_routing": typesafe.is_enabled()
-            and os.getenv("TYPESAFE_CHAT_ROUTING", "1") != "0",
+            "chat_routing": typesafe.is_enabled() and os.getenv("TYPESAFE_CHAT_ROUTING", "1") != "0",
             "advisory_scoring": typesafe.is_enabled(),
+            "weathernext_mode": cfg.jev.weathernext_mode,
+            "decision_features": cfg.jev.decision_features,
         },
         "provider_keys_status": {
             "groq_api_key": _has("GROQ_API_KEY"),
@@ -193,8 +275,26 @@ async def dev_diagnostics(http_request: Request):
             "tomorrow_key": _has("TOMORROW_KEY", "VITE_TOMORROW_KEY"),
             "openweather_key": _has("OPENWEATHER_KEY", "VITE_OPENWEATHER_KEY"),
             "accuweather_key": _has("ACCUWEATHER_KEY", "VITE_ACCUWEATHER_KEY"),
+            "imd_api_key": _has("IMD_API_KEY"),
+            "imd_jwt_token": _has("IMD_JWT_TOKEN"),
+            "typesafe_api_key": _has("TYPESAFE_API_KEY"),
         },
-        "fusion": {"weights": PROVIDER_WEIGHTS, "configured_providers": configured_providers()},
+        "weathernext": {
+            "enabled": cfg.weathernext.enabled,
+            "auth_mode": cfg.weathernext.auth_mode,
+            "surface": cfg.weathernext.surface,
+            "project": cfg.weathernext.project,
+            "provider_priority": cfg.provider_priority,
+            "auth_status": get_credentials_factory_status(),
+        },
+        "fusion": {
+            "weights": PROVIDER_WEIGHTS,
+            "configured_providers": configured_providers(),
+            "new_priority": cfg.provider_priority,
+        },
+        "forecast_cache": get_forecast_cache().stats(),
+        "decision_cache": get_decision_cache_stats(),
+        "catalog_coverage": get_catalog().coverage_report(),
         "registered_endpoints": endpoints,
         "registered_ai_tools": [getattr(t, "name", str(t)) for t in TOOLS],
         "recent_logs": list(RECENT_LOGS),
