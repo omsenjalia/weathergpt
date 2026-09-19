@@ -28,3 +28,10 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
+
+# Google credentials — never commit (use GOOGLE_APPLICATION_CREDENTIALS_JSON env on Vercel)
+*service-account*.json
+*service_account*.json
+*-sa.json
+client_secret*.json
+application_default_credentials.json

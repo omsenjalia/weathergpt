@@ -1,22 +1,32 @@
 """WeatherNext provider adapter.
 
-Implements bounded reads from cached WeatherNext products, with support for:
-- BigQuery surface tables (statistics)
-- GCS statistics Zarr
-- GCS full ensemble Zarr (member-level)
-- Earth Engine (optional)
+Implements bounded reads from WeatherNext products, with support for:
+- BigQuery surface tables (precomputed ensemble statistics)  <- live
+- GCS statistics Zarr                                        <- planned
+- GCS full ensemble Zarr (member-level)                      <- planned
+- Earth Engine (optional)                                    <- planned
 
 When WEATHERNEXT_ENABLED=0, no Google reads are attempted.
 
+Live path (BigQuery):
+    fetch() -> services.weathernext_bigquery.WeatherNextBigQueryAdapter
+            -> credentials chain SA JSON -> ADC -> OAuth (services.weathernext_auth)
+            -> bounded, partition-filtered point query with maximum_bytes_billed
+            -> services.weathernext_normalize -> NormalizedForecast
+
+Every failure is returned as a structured ``fallback_reason`` (provider, reason,
+surface, table, redacted message) so the provider chain can fall back honestly
+and clients can display the real source.
+
 Scientific correctness:
-- Member-first aggregation
-- Coherent run selection
-- Native units preserved internally, converted for display
+- Coherent run selection (one init_time per payload)
+- Native units preserved on the wire, converted once for display
 - Explicit unavailable states, never fabricated values
 """
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import time
 from datetime import datetime, timezone, timedelta
@@ -37,7 +47,39 @@ from services.forecast_models import (
     pa_to_hpa,
 )
 from services.providers.base import BaseForecastProvider, ProviderResult
-from services.weathernext_auth import validate_credentials, AuthStatus
+from services.weathernext_auth import validate_credentials, AuthStatus, CredentialsUnavailable
+
+# Query reason codes that are configuration/entitlement problems rather than
+# transient faults: they must not trip the circuit breaker, otherwise the
+# client would see "circuit_breaker_open" instead of the actionable reason.
+_NON_TRANSIENT_CODES = {
+    "live_credentials_required",
+    "credential_refresh_failed",
+    "permission_denied",
+    "billing_disabled",
+    "unauthenticated",
+    "table_not_found",
+    "table_not_configured",
+    "invalid_table",
+    "invalid_columns",
+    "invalid_run_id",
+    "schema_mismatch",
+    "bytes_billed_limit_exceeded",
+    "missing_dependency_bigquery",
+    "no_candidate_run",
+}
+
+_ERROR_CODE_BY_REASON = {
+    "live_credentials_required": "missing_credentials",
+    "credential_refresh_failed": "missing_credentials",
+    "unauthenticated": "missing_credentials",
+    "permission_denied": "not_granted",
+    "billing_disabled": "not_granted",
+    "quota_exceeded": "rate_limited",
+    "query_timeout": "timeout",
+    "no_recent_run": "unavailable",
+    "run_not_available": "unavailable",
+}
 
 
 class WeatherNextProvider(BaseForecastProvider):
@@ -103,38 +145,33 @@ class WeatherNextProvider(BaseForecastProvider):
                 },
             )
 
-        # Check for cached data first
-        try:
-            from services.forecast_cache import get_cache
-            cache = get_cache()
-            # Try to get from cache
-            cache_key = f"weathernext_{lat:.2f}_{lon:.2f}_{product}"
-            cached = cache.get(cache_key)
-            if cached:
-                # Validate freshness
-                init_time = cached.provenance.init_time_utc
-                freshness = self.get_freshness_status(init_time)
-                if freshness == FreshnessStatus.FRESH:
-                    self.record_success()
-                    return ProviderResult(
-                        success=True,
-                        forecast=cached,
-                        latency_ms=(time.perf_counter() - start) * 1000,
-                    )
-                elif freshness == FreshnessStatus.STALE and kwargs.get("allow_stale", False):
-                    # Allow stale if explicitly permitted and within bounds
-                    self.record_success()
-                    cached.provenance.is_stale = True
-                    cached.provenance.freshness_status = FreshnessStatus.STALE
-                    return ProviderResult(
-                        success=True,
-                        forecast=cached,
-                        latency_ms=(time.perf_counter() - start) * 1000,
-                        is_stale=True,
-                    )
-        except Exception:
-            # Cache failures are non-fatal
-            pass
+        # Check for cached data first (shared per grid cell + horizon, run-keyed
+        # inside the payload). Explicit run_id pins bypass the cache.
+        cache_key = self._cache_key(lat, lon, product, **kwargs)
+        if cache_key and not kwargs.get("run_id"):
+            try:
+                from services.forecast_cache import get_cache
+                cached = get_cache().get(cache_key)
+                if cached:
+                    freshness = self.get_freshness_status(cached.provenance.init_time_utc)
+                    if freshness == FreshnessStatus.FRESH:
+                        self.record_success()
+                        return ProviderResult(
+                            success=True,
+                            forecast=self._restamp(cached, kwargs.get("requested_source", "auto"), FreshnessStatus.FRESH),
+                            latency_ms=(time.perf_counter() - start) * 1000,
+                        )
+                    if freshness == FreshnessStatus.STALE and kwargs.get("allow_stale", False):
+                        self.record_success()
+                        return ProviderResult(
+                            success=True,
+                            forecast=self._restamp(cached, kwargs.get("requested_source", "auto"), FreshnessStatus.STALE),
+                            latency_ms=(time.perf_counter() - start) * 1000,
+                            is_stale=True,
+                        )
+            except Exception:
+                # Cache failures are non-fatal
+                pass
 
         # Attempt actual WeatherNext fetch based on surface
         try:
@@ -164,66 +201,132 @@ class WeatherNextProvider(BaseForecastProvider):
                 latency_ms=(time.perf_counter() - start) * 1000,
             )
 
-    def _fetch_bigquery(self, lat: float, lon: float, product: str, start_time: float, **kwargs) -> ProviderResult:
-        """Fetch from BigQuery linked tables."""
+    # ------------------------------------------------------------------
+    # BigQuery surface (live)
+    # ------------------------------------------------------------------
+
+    def _cache_key(self, lat: float, lon: float, product: str, **kwargs) -> Optional[str]:
         cfg = get_config().weathernext
+        if cfg.surface != "bigquery" or not cfg.bq.surface_table:
+            return None
+        res = 0.05 if "0p05" in cfg.bq.surface_table else 0.1
+        cell_lat = round(round(lat / res) * res, 3)
+        cell_lon = round(round(lon / res) * res, 3)
+        horizon = self._horizon_hours(**kwargs)
+        table_short = cfg.bq.surface_table.rsplit(".", 1)[-1]
+        return f"weathernext:{table_short}:{cfg.bq.column_profile}:{cell_lat}:{cell_lon}:{horizon}"
 
-        # Check if BigQuery library available
+    def _horizon_hours(self, **kwargs) -> int:
+        cfg = get_config().weathernext
+        days = kwargs.get("forecast_days") or 7
         try:
-            from google.cloud import bigquery  # type: ignore
-        except ImportError:
-            # Library not installed - return structured unavailable that indicates
-            # we are configured but missing dependency (for testing, this triggers fallback)
-            # In shadow mode, this would be logged for evaluation
-            return ProviderResult(
-                success=False,
-                error="BigQuery client library not installed",
-                error_code="unavailable",
-                fallback_reason={
-                    "provider": self.name.value,
-                    "reason": "missing_dependency_bigquery",
-                    "surface": "bigquery",
-                },
-                latency_ms=(time.perf_counter() - start_time) * 1000,
-            )
+            days = int(days)
+        except (TypeError, ValueError):
+            days = 7
+        days = max(1, days)
+        # +24 h so the local "today" bucket (which started before now) is
+        # complete and the last requested day is not truncated.
+        return int(min(days * 24 + 24, cfg.run_policy.max_horizon_hours))
 
-        # Check for credentials
-        creds, err = self._get_credentials()
-        if err:
-            return ProviderResult(
-                success=False,
-                error=err,
-                error_code="missing_credentials",
-                fallback_reason={"provider": self.name.value, "reason": "credentials_failed"},
-                latency_ms=(time.perf_counter() - start_time) * 1000,
-            )
+    @staticmethod
+    def _restamp(cached: NormalizedForecast, requested_source: str, freshness: FreshnessStatus) -> NormalizedForecast:
+        """Return a shallow copy with request-specific provenance (cache entries are shared)."""
+        provenance = dataclasses.replace(
+            cached.provenance,
+            requested_source=requested_source,
+            served_at_utc=datetime.now(timezone.utc),
+            freshness_status=freshness,
+            is_stale=freshness != FreshnessStatus.FRESH,
+            query_diagnostics={**(cached.provenance.query_diagnostics or {}), "served_from_cache": True},
+        )
+        return dataclasses.replace(cached, provenance=provenance)
 
-        # For this implementation, we simulate a bounded query with dry-run
-        # Real implementation would:
-        # 1. Use parameterized query with lat/lon
-        # 2. Set maximum_bytes_billed
-        # 3. Use init_time predicates to get latest complete run
-        # 4. Validate completeness per field group
+    def _failure(self, reason: str, message: str, start_time: float, *, table: Optional[str], transient: bool, extra: Optional[dict] = None) -> ProviderResult:
+        if transient:
+            self.record_failure()
+        fallback = {
+            "provider": self.name.value,
+            "reason": reason,
+            "surface": "bigquery",
+            "table": table,
+            "message": message[:200],
+        }
+        if extra:
+            fallback.update(extra)
+        return ProviderResult(
+            success=False,
+            error=f"WeatherNext BigQuery: {reason}: {message[:200]}",
+            error_code=_ERROR_CODE_BY_REASON.get(reason, "unavailable"),
+            fallback_reason=fallback,
+            latency_ms=(time.perf_counter() - start_time) * 1000,
+        )
 
-        # Since we don't have real BigQuery access in this sandbox,
-        # return a mock that indicates we attempted but need real credentials
-        # This honest behavior allows the provider chain to fall back to AccuWeather/Open-Meteo
+    def _fetch_bigquery(self, lat: float, lon: float, product: str, start_time: float, **kwargs) -> ProviderResult:
+        """Bounded point query against the WeatherNext 3 BigQuery surface table."""
+        cfg = get_config().weathernext
+        table = cfg.bq.surface_table
 
-        # If in test mode with mock data, return synthetic but clearly labeled data
+        # Offline synthetic data for tests / demos - clearly labelled, never live.
         if os.getenv("WEATHERNEXT_MOCK_DATA", "0") == "1":
             return self._mock_forecast(lat, lon, product, start_time, **kwargs)
 
+        try:
+            from services.weathernext_bigquery import WeatherNextQueryError, get_bigquery_adapter
+            from services.weathernext_normalize import normalize_point_forecast
+        except ImportError as exc:  # pragma: no cover - only when google libs are absent
+            return self._failure("missing_dependency_bigquery", str(exc), start_time, table=table, transient=False)
+
+        requested_source = kwargs.get("requested_source", "auto")
+        mode = kwargs.get("mode", "everyone")
+        horizon = self._horizon_hours(**kwargs)
+        forecast_days = kwargs.get("forecast_days") or 7
+
+        try:
+            adapter = get_bigquery_adapter()
+            result = adapter.fetch_point_forecast(lat, lon, horizon_hours=horizon, run_id=kwargs.get("run_id") or None)
+        except CredentialsUnavailable as exc:
+            return self._failure(
+                exc.code, str(exc), start_time, table=table, transient=False,
+                extra={"credential_attempts": exc.attempts},
+            )
+        except WeatherNextQueryError as exc:
+            return self._failure(
+                exc.code, str(exc), start_time, table=table,
+                transient=exc.code not in _NON_TRANSIENT_CODES,
+                extra={k: v for k, v in exc.details.items() if k in ("required_bytes", "attempted_runs", "attempts")},
+            )
+        except ImportError as exc:
+            return self._failure("missing_dependency_bigquery", str(exc), start_time, table=table, transient=False)
+        except Exception as exc:  # defensive: never let the chain crash
+            return self._failure(f"exception_{type(exc).__name__}", str(exc), start_time, table=table, transient=True)
+
+        try:
+            normalized = normalize_point_forecast(
+                result,
+                lat=lat,
+                lon=lon,
+                requested_source=requested_source,
+                mode=mode,
+                forecast_days=int(forecast_days),
+                freshness_hours=cfg.run_policy.freshness_hours,
+            )
+        except Exception as exc:
+            return self._failure(f"normalization_failed_{type(exc).__name__}", str(exc), start_time, table=table, transient=True)
+
+        cache_key = self._cache_key(lat, lon, product, **kwargs)
+        if cache_key and not kwargs.get("run_id"):
+            try:
+                from services.forecast_cache import get_cache
+                get_cache().set(cache_key, normalized, ttl_seconds=cfg.run_policy.cache_ttl_seconds)
+            except Exception:
+                pass
+
+        self.record_success()
         return ProviderResult(
-            success=False,
-            error="BigQuery surface requires live Google credentials and linked dataset - using fallback",
-            error_code="unavailable",
-            fallback_reason={
-                "provider": self.name.value,
-                "reason": "live_credentials_required",
-                "surface": "bigquery",
-                "table": cfg.bq.surface_table,
-            },
+            success=True,
+            forecast=normalized,
             latency_ms=(time.perf_counter() - start_time) * 1000,
+            is_stale=normalized.provenance.is_stale,
         )
 
     def _fetch_gcs_statistics(self, lat: float, lon: float, product: str, start_time: float, **kwargs) -> ProviderResult:
@@ -261,6 +364,7 @@ class WeatherNextProvider(BaseForecastProvider):
         )
 
     def _get_credentials(self):
+        """Backward-compatible helper: (CredentialBundle | None, error | None)."""
         from services.weathernext_auth import build_google_credentials
         return build_google_credentials()
 
