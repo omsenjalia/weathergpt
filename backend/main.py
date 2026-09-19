@@ -1,16 +1,20 @@
 """WeatherGPT API — single FastAPI app serving two clients.
 
-    weathergpt  (web,    React/Vite)   → POST /chat, GET /dev, POST /dev/sandbox, GET /fusion
-    weathergpt-app (mobile, Flutter)   → POST /chat, GET /weather, /advisory, /historical, /comparison
+    weathergpt  (web,    React/Vite)   → POST /chat, GET /dev, POST /dev/sandbox, GET /fusion, /v2/weather/*
+    weathergpt-app (mobile, Flutter)   → POST /chat, GET /weather, /advisory, /historical, /comparison, /v2/decisions/*
 
 Layout
 ------
     main.py            app factory + middleware (this file)
     schemas.py         shared pydantic contracts
     state.py           uptime + recent-log ring buffer
-    services/          open_meteo (baseline provider), fusion (ensemble), chat (routing policy)
-    routers/           chat, mobile, dev
-    agent.py, tools.py LangGraph agent + telemetry tools (unchanged public API)
+    services/          open_meteo (baseline), fusion (legacy), forecast (IMD->WeatherNext->AccuWeather->Open-Meteo),
+                       config (typed loader), weathernext_auth (credentials factory),
+                       weathernext_catalog, weathernext_tools, forecast_cache, forecast_aggregation,
+                       decisions/* (registry, engine, policy, features, questions, audit),
+                       chat (routing policy), advisory (farm logic), typesafe (Jev)
+    routers/           chat, mobile, dev, weather_v2, decisions
+    agent.py, tools.py LangGraph agent + telemetry tools with parity
 
 Run locally:  uvicorn main:app --host 0.0.0.0 --port 8888
 Vercel:       api/index.py re-exports `app`.
@@ -32,9 +36,12 @@ from fastapi.responses import JSONResponse  # noqa: E402
 from routers import chat as chat_router  # noqa: E402
 from routers import dev as dev_router  # noqa: E402
 from routers import mobile as mobile_router  # noqa: E402
+from routers import weather_v2 as weather_v2_router  # noqa: E402
+from routers import decisions as decisions_router  # noqa: E402
 from state import log_event  # noqa: E402
+from services.config import get_config  # noqa: E402
 
-API_VERSION = "2.0.0"
+API_VERSION = "2.1.0"
 QUIET_PATHS = {"/health", "/health/", "/dev", "/dev/"}
 
 CHAT_CONTRACT = {
@@ -48,8 +55,14 @@ CHAT_CONTRACT = {
         "farmer_mode": "bool",
         "crop": "string",
         "client": "web | mobile optional hint",
+        "mode": "everyone|farmer|researcher (new, validated)",
+        "requested_source": "auto|imd|weathernext|accuweather|open_meteo (researcher)",
     },
-    "response": {"response": "markdown string", "meta": "{path, client, language, location}"},
+    "response": {
+        "response": "markdown string",
+        "meta": "{path, client, language, location, requested_source, selected_source, provenance}",
+        "v2": "Optional structured weather/decision evidence for new clients",
+    },
 }
 
 
@@ -59,8 +72,14 @@ def create_app() -> FastAPI:
         version=API_VERSION,
         description=(
             "Shared backend for **weathergpt** (web) and **weathergpt-app** (Flutter).\n\n"
-            "Current conditions everywhere come from the multi-provider fusion engine with "
-            "priority **Open-Meteo > AccuWeather > WeatherAPI / Tomorrow.io / OpenWeatherMap**."
+            "Forecast provider priority (new): **IMD (when configured and eligible) → "
+            "Google DeepMind WeatherNext → AccuWeather → Open-Meteo (fallback)**. "
+            "Legacy fusion (Open-Meteo > AccuWeather > others) retained as diagnostic.\n\n"
+            "WeatherNext surfaces: BigQuery, GCS statistics, GCS full ensemble (64 members), "
+            "Earth Engine (optional), Cyclones, with capability catalog at /v2/weather/catalog.\n\n"
+            "Decision platform: 45 initial Jev features across routing, farmer, everyone, "
+            "researcher, quality, ops with off/shadow/enforce controls at /v2/decisions/*.\n\n"
+            "LangGraph agent has parity between bind_tools and ToolNode for all capabilities."
         ),
     )
 
@@ -99,27 +118,50 @@ def create_app() -> FastAPI:
     app.include_router(chat_router.router)
     app.include_router(mobile_router.router)
     app.include_router(dev_router.router)
+    app.include_router(weather_v2_router.router)
+    app.include_router(decisions_router.router)
+    app.include_router(decisions_router.admin_router)
 
     @app.get("/", tags=["meta"])
     async def root():
         """Service index — confirms the dual-client API surface."""
+        cfg = get_config()
         return {
             "service": "WeatherGPT API",
             "version": API_VERSION,
             "status": "ok",
             "clients": {
                 "web": {"repo": "weathergpt",
-                        "endpoints": ["/chat", "/fusion", "/dev", "/dev/sandbox", "/health"]},
+                        "endpoints": ["/chat", "/fusion", "/dev", "/dev/sandbox", "/health", "/v2/weather/*"]},
                 "mobile": {"repo": "weathergpt-app",
                            "endpoints": ["/chat", "/weather", "/advisory", "/historical",
-                                         "/comparison", "/fusion", "/health"]},
+                                         "/comparison", "/fusion", "/health", "/v2/decisions/*"]},
             },
-            "fusion_priority": ["Open-Meteo (ECMWF)", "AccuWeather", "WeatherAPI.com",
-                                "Tomorrow.io", "OpenWeatherMap"],
+            "provider_priority": {
+                "current": cfg.provider_priority,
+                "default": ["imd", "weathernext", "accuweather", "open_meteo"],
+                "policy_version": "1.0.0",
+                "legacy_fusion": ["Open-Meteo (ECMWF)", "AccuWeather", "WeatherAPI.com",
+                                  "Tomorrow.io", "OpenWeatherMap"],
+            },
+            # Backward compat for old clients/tests expecting fusion_priority
+            "fusion_priority": ["Open-Meteo (ECMWF)", "AccuWeather", "WeatherAPI.com", "Tomorrow.io", "OpenWeatherMap"],
+            "weathernext": {
+                "enabled": cfg.weathernext.enabled,
+                "auth_mode": cfg.weathernext.auth_mode,
+                "surface": cfg.weathernext.surface,
+                "project": cfg.weathernext.project,
+            },
+            "jev": {
+                "enabled": cfg.jev.enabled,
+                "model": cfg.jev.model,
+                "weathernext_mode": cfg.jev.weathernext_mode,
+                "decision_features": cfg.jev.decision_features,
+            },
             "chat_contract": CHAT_CONTRACT,
         }
 
-    log_event("INFO", "Backend server starting up...")
+    log_event("INFO", "Backend server starting up with WeatherNext + Jev decision platform...")
     return app
 
 
