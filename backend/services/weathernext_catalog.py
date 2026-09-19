@@ -244,9 +244,63 @@ def build_default_catalog() -> list[CapabilityRecord]:
     return records
 
 
+def surface_access_manifest() -> list[dict]:
+    """The nine grant checkboxes as explicit, machine-readable capabilities.
+
+    A grant is not the same thing as a production verification.  The adapter
+    code is implemented in this repository, so the default state is
+    ``implemented``; operators can promote an individual surface to
+    ``verified`` only after a live probe (``WEATHERNEXT_VERIFY_*``).
+    """
+    from services.config import get_config
+    cfg = get_config().weathernext
+    probes = {
+        "wn2_earth_engine": os.getenv("WEATHERNEXT_VERIFY_WN2_EE") == "1",
+        "wn2_bigquery": os.getenv("WEATHERNEXT_VERIFY_WN2_BQ") == "1",
+        "wn2_gcs": os.getenv("WEATHERNEXT_VERIFY_WN2_GCS") == "1",
+        "wn2_mean_earth_engine": os.getenv("WEATHERNEXT_VERIFY_WN2_MEAN_EE") == "1",
+        "wn2_mean_bigquery": os.getenv("WEATHERNEXT_VERIFY_WN2_MEAN_BQ") == "1",
+        "wn2_mean_gcs": os.getenv("WEATHERNEXT_VERIFY_WN2_MEAN_GCS") == "1",
+        "wn3_earth_engine": os.getenv("WEATHERNEXT_VERIFY_WN3_EE") == "1",
+        "wn3_bigquery": os.getenv("WEATHERNEXT_VERIFY_WN3_BQ") == "1",
+        "wn3_gcs": os.getenv("WEATHERNEXT_VERIFY_WN3_GCS") == "1",
+    }
+    rows = [
+        ("wn2_earth_engine", "weathernext_2_0_0", "earth_engine", "Earth Engine WN2 map collection", "/v2/weather/tiles", cfg.ee_project or "projects/gcp-public-data-weathernext/assets/weathernext_2_0_0_0p1deg"),
+        ("wn2_bigquery", "weathernext_2_0_0", "bigquery", "WN2 point statistics", "/v2/weather", cfg.bq.table_2),
+        ("wn2_gcs", "weathernext_2_0_0", "gcs_ensemble", "WN2 full ensemble Zarr", "/v2/weather/ensemble", cfg.gcs.wn2_ensemble_root),
+        ("wn2_mean_earth_engine", "weathernext_2_0_0", "earth_engine", "WN2 mean/statistics map collection", "/v2/weather/tiles", cfg.ee_project or "projects/gcp-public-data-weathernext/assets/weathernext_2_0_0_0p1deg"),
+        ("wn2_mean_bigquery", "weathernext_2_0_0", "bigquery", "WN2 mean/statistics point query", "/v2/weather", cfg.bq.table_2),
+        ("wn2_mean_gcs", "weathernext_2_0_0_statistics", "gcs_statistics", "WN2 mean/statistics Zarr", "/v2/weather/series", cfg.gcs.wn2_statistics_root),
+        ("wn3_earth_engine", "weathernext_3_0_0", "earth_engine", "WN3 0.1/0.05 degree map collection", "/v2/weather/tiles", "projects/gcp-public-data-weathernext/assets/weathernext_3_0_0_0p1deg"),
+        ("wn3_bigquery", "weathernext_3_0_0", "bigquery", "WN3 0.1 degree and high-resolution point statistics", "/v2/weather", cfg.bq.table_3 or cfg.bq.surface_table),
+        ("wn3_gcs", "weathernext_3_0_0", "gcs_ensemble", "WN3 full ensemble and statistics Zarr", "/v2/weather/ensemble", cfg.gcs.ensemble_root),
+    ]
+    return [
+        {
+            "capability_id": capability_id,
+            "product": product,
+            "surface": surface,
+            "description": description,
+            "backend_route": route,
+            "resource_identifier": resource,
+            "access_status": "verified" if probes[capability_id] else "implemented",
+            "grant_present": True,
+            "live_probe_required": not probes[capability_id],
+        }
+        for capability_id, product, surface, description, route, resource in rows
+    ]
+
+
 class Catalog:
     def __init__(self):
         self._records = build_default_catalog()
+        # The adapter implementations in this checkout cover the catalog's
+        # BQ/GCS/EE routes.  Do not claim live entitlement verification here;
+        # the nine-checkbox manifest reports that separately.
+        for record in self._records:
+            if record.surface in {"bigquery", "gcs_ensemble", "gcs_statistics", "earth_engine"} and record.access_status == CapabilityState.PLANNED:
+                record.access_status = CapabilityState.IMPLEMENTED
         self._by_id = {r.capability_id: r for r in self._records}
 
     def all(self) -> list[CapabilityRecord]:

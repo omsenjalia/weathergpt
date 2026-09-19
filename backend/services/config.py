@@ -165,8 +165,14 @@ BQ_COLUMN_PROFILES: dict[str, tuple[str, ...]] = {
 @dataclass(frozen=True)
 class WeatherNextBQConfig:
     location: str = "US"
+    # ``surface_table`` is the backwards-compatible default (WN3 0.1 degree).
+    # The model-specific fields let one process serve WN2 and WN3 without
+    # mutating global configuration between requests.
     surface_table: Optional[str] = None
     station_table: Optional[str] = None
+    table_3: Optional[str] = None
+    table_3_high_resolution: Optional[str] = None
+    table_2: Optional[str] = None
     max_bytes_billed: int = DEFAULT_BQ_MAX_BYTES_BILLED
     column_profile: str = "standard"
     query_timeout_seconds: float = 25.0
@@ -178,11 +184,38 @@ class WeatherNextBQConfig:
     def columns(self) -> tuple[str, ...]:
         return BQ_COLUMN_PROFILES.get(self.column_profile, BQ_COLUMN_PROFILES["standard"])
 
+    def table_for(self, model: str = "weathernext_3", *, high_resolution: bool = False) -> Optional[str]:
+        """Return the configured table for a public model alias.
+
+        WN3's high-resolution table is intentionally opt-in: it is much more
+        expensive and contains a narrower station-head schema.  Unknown model
+        aliases are rejected by the adapters rather than silently selecting WN3.
+        """
+        normalized = (model or "weathernext_3").lower().replace("-", "_")
+        if normalized in {"weathernext_3", "weathernext_3_0_0", "wn3", "3", "3.0.0"}:
+            if high_resolution:
+                return self.table_3_high_resolution or self.station_table
+            return self.table_3 or self.surface_table
+        if normalized in {"weathernext_2", "weathernext_2_0_0", "wn2", "2", "2.0.0"}:
+            return self.table_2
+        raise ValueError(f"Unsupported WeatherNext model: {model}")
+
+
 @dataclass(frozen=True)
 class WeatherNextGCSConfig:
     ensemble_root: str = "gs://weathernext3_spatial/weathernext_3_0_0/zarr/"
     statistics_root: str = "gs://weathernext3_statistics_spatial/weathernext_3_0_0_statistics/zarr/"
+    wn2_ensemble_root: str = "gs://weathernext2_spatial/"
+    wn2_statistics_root: str = "gs://weathernext2_statistics_spatial/"
     user_project: Optional[str] = None
+
+    def root_for(self, model: str = "weathernext_3", *, statistics: bool = False) -> str:
+        normalized = (model or "weathernext_3").lower().replace("-", "_")
+        if normalized in {"weathernext_3", "weathernext_3_0_0", "wn3", "3", "3.0.0"}:
+            return self.statistics_root if statistics else self.ensemble_root
+        if normalized in {"weathernext_2", "weathernext_2_0_0", "wn2", "2", "2.0.0"}:
+            return self.wn2_statistics_root if statistics else self.wn2_ensemble_root
+        raise ValueError(f"Unsupported WeatherNext model: {model}")
 
 @dataclass(frozen=True)
 class GoogleOAuthConfig:
@@ -313,20 +346,29 @@ def load_weathernext_config() -> WeatherNextConfig:
     quota_project = _get_env("GOOGLE_CLOUD_QUOTA_PROJECT") or project
 
     bq_location = _get_env("WEATHERNEXT_BQ_LOCATION", "US") or "US"
-    # WEATHERNEXT_TABLE / WEATHERNEXT_STATION_TABLE are the short aliases used in
-    # the deployment plan; the *_BQ_* names are the original contract.
-    bq_surface_table = _get_env("WEATHERNEXT_BQ_SURFACE_TABLE") or _get_env("WEATHERNEXT_TABLE")
-    bq_station_table = _get_env("WEATHERNEXT_BQ_STATION_TABLE") or _get_env("WEATHERNEXT_STATION_TABLE")
+    # The deployment plan names the three public Analytics Hub tables directly;
+    # retain the original aliases for existing deployments.
+    bq_table_3 = _get_env("WEATHERNEXT_TABLE_3") or _get_env("WEATHERNEXT_BQ_SURFACE_TABLE") or _get_env("WEATHERNEXT_TABLE")
+    bq_table_3_hr = _get_env("WEATHERNEXT_TABLE_3_HR") or _get_env("WEATHERNEXT_BQ_STATION_TABLE") or _get_env("WEATHERNEXT_STATION_TABLE")
+    bq_table_2 = _get_env("WEATHERNEXT_TABLE_2")
+    bq_surface_table = bq_table_3
+    bq_station_table = bq_table_3_hr
     bq_max_bytes = _int_env("WEATHERNEXT_BQ_MAX_BYTES_BILLED", DEFAULT_BQ_MAX_BYTES_BILLED)
     bq_profile = (_get_env("WEATHERNEXT_BQ_COLUMN_PROFILE", "standard") or "standard").lower()
     bq_timeout = _float_env("WEATHERNEXT_QUERY_TIMEOUT_SECONDS", 25.0)
     bq_radius_km = _float_env("WEATHERNEXT_NEAREST_RADIUS_KM", 9.0)
 
-    gcs_ensemble = _get_env("WEATHERNEXT_GCS_ENSEMBLE_ROOT", "gs://weathernext3_spatial/weathernext_3_0_0/zarr/") or "gs://weathernext3_spatial/weathernext_3_0_0/zarr/"
-    gcs_stats = _get_env("WEATHERNEXT_GCS_STATISTICS_ROOT", "gs://weathernext3_statistics_spatial/weathernext_3_0_0_statistics/zarr/") or "gs://weathernext3_statistics_spatial/weathernext_3_0_0_statistics/zarr/"
+    gcs_ensemble = _get_env("WEATHERNEXT_GCS_ENSEMBLE_ROOT") or (
+        "gs://" + (_get_env("WEATHERNEXT_GCS_BUCKET_3") or "weathernext3_spatial") + "/weathernext_3_0_0/zarr/"
+    )
+    gcs_stats = _get_env("WEATHERNEXT_GCS_STATISTICS_ROOT") or (
+        "gs://" + (_get_env("WEATHERNEXT_GCS_STATS_3") or "weathernext3_statistics_spatial") + "/weathernext_3_0_0_statistics/zarr/"
+    )
+    gcs_wn2 = _get_env("WEATHERNEXT_GCS_BUCKET_2") or "weathernext2_spatial"
+    gcs_wn2_stats = _get_env("WEATHERNEXT_GCS_STATS_2") or "weathernext2_statistics_spatial"
     gcs_user_project = _get_env("WEATHERNEXT_GCS_USER_PROJECT") or quota_project
 
-    ee_project = _get_env("WEATHERNEXT_EE_PROJECT")
+    ee_project = _get_env("WEATHERNEXT_EE_PROJECT") or project
 
     google_creds_path = _get_env_raw("GOOGLE_APPLICATION_CREDENTIALS")
     if google_creds_path and _is_placeholder(google_creds_path):
@@ -362,6 +404,9 @@ def load_weathernext_config() -> WeatherNextConfig:
             location=bq_location,
             surface_table=bq_surface_table,
             station_table=bq_station_table,
+            table_3=bq_table_3,
+            table_3_high_resolution=bq_table_3_hr,
+            table_2=bq_table_2,
             max_bytes_billed=bq_max_bytes,
             column_profile=bq_profile,
             query_timeout_seconds=bq_timeout,
@@ -370,6 +415,8 @@ def load_weathernext_config() -> WeatherNextConfig:
         gcs=WeatherNextGCSConfig(
             ensemble_root=gcs_ensemble,
             statistics_root=gcs_stats,
+            wn2_ensemble_root=f"gs://{gcs_wn2}/",
+            wn2_statistics_root=f"gs://{gcs_wn2_stats}/",
             user_project=gcs_user_project,
         ),
         ee_project=ee_project,

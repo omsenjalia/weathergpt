@@ -112,6 +112,7 @@ class WeatherV2Request(BaseModel):
     lon: float = Field(..., ge=-180, le=180)
     mode: str = Field("everyone")
     requested_source: str = Field("auto")
+    model: str = Field("weathernext_3")
     forecast_days: int = Field(3, ge=1, le=15)
     language: str = "en"
 

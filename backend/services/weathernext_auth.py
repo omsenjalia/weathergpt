@@ -35,12 +35,14 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 from services.config import WeatherNextConfig, get_config
 from state import log_event
 
 BIGQUERY_SCOPES = ["https://www.googleapis.com/auth/bigquery"]
+STORAGE_READ_SCOPES = ["https://www.googleapis.com/auth/devstorage.read_only"]
+EARTH_ENGINE_SCOPES = ["https://www.googleapis.com/auth/earthengine"]
 OAUTH_TOKEN_URI = "https://oauth2.googleapis.com/token"
 
 # Repository root - credential files inside the repo are rejected.
@@ -395,6 +397,120 @@ def get_bigquery_credentials(config: Optional[WeatherNextConfig] = None, *, forc
             "No usable Google credentials (tried: " + ", ".join(a["source"] for a in attempts) + ")",
             attempts=attempts,
         )
+
+
+def get_credentials(scopes: Optional[Sequence[str]] = None):
+    """Resolve credentials for any WeatherNext surface.
+
+    BigQuery's adapter keeps its richer, cached :class:`CredentialBundle`; this
+    small scope-aware helper is shared by GCS and Earth Engine, whose OAuth
+    scopes differ.  The service-account JSON path is deliberately first so a
+    Vercel function never depends on an OAuth refresh token or metadata server.
+    """
+    requested_scopes = list(scopes or BIGQUERY_SCOPES)
+    raw = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+    project = os.getenv("GOOGLE_CLOUD_PROJECT") or None
+    quota_project = os.getenv("GOOGLE_CLOUD_QUOTA_PROJECT") or project
+    attempts: list[dict] = []
+
+    if raw and raw.lstrip().startswith("{"):
+        try:
+            info = json.loads(raw)
+            if info.get("type") != "service_account":
+                raise ValueError("credential JSON is not a service_account key")
+            from google.oauth2 import service_account  # type: ignore
+            credentials = service_account.Credentials.from_service_account_info(info, scopes=requested_scopes)
+            if quota_project and hasattr(credentials, "with_quota_project"):
+                credentials = credentials.with_quota_project(quota_project)
+            return credentials
+        except ImportError as exc:
+            attempts.append({"source": "service_account_json", "error": "missing_dependency_google_auth"})
+        except Exception as exc:
+            attempts.append({"source": "service_account_json", "error": _redact_error(exc)})
+
+    path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+    if path and not path.lstrip().startswith("{"):
+        try:
+            import google.auth  # type: ignore
+            credentials, file_project = google.auth.load_credentials_from_file(path, scopes=requested_scopes)
+            if quota_project and hasattr(credentials, "with_quota_project"):
+                credentials = credentials.with_quota_project(quota_project)
+            return credentials
+        except ImportError:
+            attempts.append({"source": "credentials_file", "error": "missing_dependency_google_auth"})
+        except Exception as exc:
+            attempts.append({"source": "credentials_file", "error": _redact_error(exc)})
+
+    if not _running_serverless():
+        try:
+            import google.auth  # type: ignore
+            credentials, _ = google.auth.default(scopes=requested_scopes)
+            if quota_project and hasattr(credentials, "with_quota_project"):
+                credentials = credentials.with_quota_project(quota_project)
+            return credentials
+        except ImportError:
+            attempts.append({"source": "adc", "error": "missing_dependency_google_auth"})
+        except Exception as exc:
+            attempts.append({"source": "adc", "error": _redact_error(exc)})
+
+    # OAuth remains a development fallback.  Do not eagerly refresh here: the
+    # caller may only need an EE credential object and can refresh on demand.
+    client_id = os.getenv("GOOGLE_OAUTH_CLIENT_ID")
+    client_secret = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET")
+    refresh_token = os.getenv("GOOGLE_OAUTH_REFRESH_TOKEN")
+    if client_id and client_secret and refresh_token:
+        try:
+            from google.auth.transport.requests import Request  # type: ignore
+            from google.oauth2.credentials import Credentials  # type: ignore
+            credentials = Credentials(
+                token=None,
+                refresh_token=refresh_token,
+                token_uri=OAUTH_TOKEN_URI,
+                client_id=client_id,
+                client_secret=client_secret,
+                scopes=requested_scopes,
+                quota_project_id=quota_project,
+            )
+            credentials.refresh(Request())
+            return credentials
+        except ImportError:
+            attempts.append({"source": "oauth_refresh_token", "error": "missing_dependency_google_auth"})
+        except Exception as exc:
+            attempts.append({"source": "oauth_refresh_token", "error": _redact_error(exc)})
+
+    raise CredentialsUnavailable(
+        "No usable Google credentials for requested WeatherNext scope",
+        attempts=attempts or [{"source": "credential_chain", "error": "not_configured"}],
+    )
+
+
+def get_bq_client():
+    """Create a BigQuery client using the service-account-first credential chain."""
+    try:
+        from google.cloud import bigquery  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError("missing_dependency_bigquery") from exc
+    credentials = get_credentials(BIGQUERY_SCOPES)
+    project = os.getenv("GOOGLE_CLOUD_PROJECT") or getattr(credentials, "project_id", None)
+    if not project:
+        raise RuntimeError("GOOGLE_CLOUD_PROJECT is required for BigQuery")
+    return bigquery.Client(credentials=credentials, project=project)
+
+
+def get_gcs_client():
+    """Create a read-only GCS client for WeatherNext Zarr surfaces."""
+    try:
+        from google.cloud import storage  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError("missing_dependency_storage") from exc
+    credentials = get_credentials(STORAGE_READ_SCOPES)
+    project = os.getenv("GOOGLE_CLOUD_PROJECT") or getattr(credentials, "project_id", None)
+    return storage.Client(credentials=credentials, project=project)
+
+
+def get_ee_credentials():
+    """Return credentials scoped for Earth Engine (initialization is lazy)."""
+    return get_credentials(EARTH_ENGINE_SCOPES)
 
 
 def get_active_credential_source() -> Optional[str]:

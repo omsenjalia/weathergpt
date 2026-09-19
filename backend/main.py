@@ -57,6 +57,7 @@ CHAT_CONTRACT = {
         "client": "web | mobile optional hint",
         "mode": "everyone|farmer|researcher (new, validated)",
         "requested_source": "auto|imd|weathernext|accuweather|open_meteo (researcher)",
+        "model": "weathernext_2|weathernext_3 (when requested_source=weathernext)",
     },
     "response": {
         "response": "markdown string",
@@ -75,8 +76,8 @@ def create_app() -> FastAPI:
             "Forecast provider priority (new): **IMD (when configured and eligible) → "
             "Google DeepMind WeatherNext → AccuWeather → Open-Meteo (fallback)**. "
             "Legacy fusion (Open-Meteo > AccuWeather > others) retained as diagnostic.\n\n"
-            "WeatherNext surfaces: BigQuery, GCS statistics, GCS full ensemble (64 members), "
-            "Earth Engine (optional), Cyclones, with capability catalog at /v2/weather/catalog.\n\n"
+            "WeatherNext surfaces: WN2/WN3 BigQuery, GCS statistics, GCS full ensemble (64 members), "
+            "Earth Engine tiles, with capability catalog at /v2/weather/catalog.\n\n"
             "Decision platform: 45 initial Jev features across routing, farmer, everyone, "
             "researcher, quality, ops with off/shadow/enforce controls at /v2/decisions/*.\n\n"
             "LangGraph agent has parity between bind_tools and ToolNode for all capabilities."
@@ -150,7 +151,13 @@ def create_app() -> FastAPI:
                 "enabled": cfg.weathernext.enabled,
                 "auth_mode": cfg.weathernext.auth_mode,
                 "surface": cfg.weathernext.surface,
+                "surfaces": ["bigquery", "gcs_statistics", "gcs_ensemble", "earth_engine"],
                 "project": cfg.weathernext.project,
+                "tables": {
+                    "wn3_0p1": cfg.weathernext.bq.table_3 or cfg.weathernext.bq.surface_table,
+                    "wn3_0p05": cfg.weathernext.bq.table_3_high_resolution,
+                    "wn2_0p1": cfg.weathernext.bq.table_2,
+                },
             },
             "jev": {
                 "enabled": cfg.jev.enabled,
