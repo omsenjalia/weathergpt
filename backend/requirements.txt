@@ -9,6 +9,9 @@ langdetect==1.0.9
 pydantic
 psutil
 pytest
+google-cloud-bigquery>=3.25.0
+google-auth>=2.35.0
+google-auth-oauthlib>=1.2.0
 
 
 
