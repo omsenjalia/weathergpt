@@ -26,7 +26,7 @@ from typing import Any, Optional
 from langchain_core.tools import tool
 
 from services.config import get_config
-from services.weathernext_catalog import get_catalog, CapabilityState
+from services.weathernext_catalog import get_catalog, CapabilityState, surface_access_manifest
 from services.forecast import get_forecast_service
 from services.forecast_models import ProviderName
 
@@ -85,9 +85,10 @@ def list_weathernext_capabilities(
             "ui_entry_point": r.ui_entry_point,
             "langgraph_tool": r.langgraph_tool,
             "blocker": r.blocker,
-        } for r in records[:100]],
+        } for r in records],
         total=len(records),
         coverage=catalog.coverage_report(),
+        surface_access=surface_access_manifest(),
     )
 
 
@@ -112,25 +113,14 @@ def list_weathernext_runs(
             message="WEATHERNEXT_ENABLED=0",
         )
 
-    # Mock runs for demonstration
-    now = datetime.now(timezone.utc)
-    runs = []
-    for i in range(4):
-        init = now.replace(hour=[0,6,12,18][i % 4], minute=0, second=0, microsecond=0)
-        runs.append({
-            "run_id": f"{product}_{init.strftime('%Y%m%d%H')}",
-            "init_time_utc": init.isoformat(),
-            "surface": surface,
-            "completeness": "complete" if i < 2 else "partial",
-            "horizon_hours": 360,
-            "is_latest_complete": i == 0,
-        })
-
+    # Availability is location/partition dependent and must not be inferred
+    # from wall-clock synoptic times.  Do not return fabricated "complete"
+    # runs when no live adapter has enumerated a partition.
     return _envelope(
-        status="ok",
-        data=runs,
+        status="unsupported",
+        data=[],
         effective_query={"product": product, "surface": surface, "hours": hours},
-        source="weathernext_catalog",
+        message="Run discovery requires a bounded point or region query; no run is claimed without a live adapter response",
     )
 
 
@@ -174,6 +164,8 @@ def query_weathernext_data(
         product="forecast",
         requested_source="weathernext",
         mode="researcher",
+        run_id=run_id or None,
+        forecast_days=7,
     )
 
     if not result.forecast:
@@ -247,32 +239,21 @@ def get_weathernext_profile(
     if invalid_levels:
         return _envelope(status="unsupported", message=f"Unsupported levels: {invalid_levels}", allowed_levels=PRESSURE_LEVELS)
 
-    service = get_forecast_service()
-    result = service.select_forecast(lat=latitude, lon=longitude, product="profile", requested_source="weathernext", mode="researcher")
-
-    if not result.forecast:
-        return _envelope(status="unavailable", message=result.error or "Profile unavailable", fallback_reasons=result.fallback_reasons)
-
-    # Mock profile data
     var_list = [v.strip() for v in variables.split(",") if v.strip()]
-    profile = []
-    for lvl in level_list:
-        entry = {"level_hpa": lvl}
-        for var in var_list:
-            # Mock values
-            if "temperature" in var:
-                entry[var] = 15 - (1000 - lvl) * 0.05  # rough lapse
-            elif "wind" in var:
-                entry[var] = 10 + lvl * 0.01
-            else:
-                entry[var] = None
-        profile.append(entry)
+    try:
+        from services.weathernext_gcs import WeatherNextGCSQueryError, get_gcs_adapter
+        payload = get_gcs_adapter().query_profile(
+            latitude, longitude, variables=var_list, levels=level_list, run_id=valid_time,
+        )
+    except Exception as exc:
+        return _envelope(status="unavailable", message=str(exc), fallback_reasons=[{"surface": "gcs_ensemble", "reason": getattr(exc, "code", "query_failed")}])
 
     return _envelope(
         status="ok",
-        data={"profile": profile, "variables": var_list, "levels": level_list},
+        data={"profile": payload["profile"], "variables": var_list, "levels": level_list},
         effective_query={"lat": latitude, "lon": longitude, "valid_time": valid_time, "variables": var_list},
-        source=["weathernext"],
+        source=[payload.get("surface", "gcs_ensemble")],
+        provenance=payload,
         evidence_id=f"profile_{latitude:.2f}_{longitude:.2f}_{valid_time}",
     )
 
@@ -293,42 +274,42 @@ def analyze_weathernext_ensemble(
     if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
         return _envelope(status="invalid", message="Invalid coordinates")
 
-    service = get_forecast_service()
-    result = service.select_forecast(lat=latitude, lon=longitude, product="ensemble", requested_source="weathernext", mode="researcher")
-
-    if not result.forecast:
-        return _envelope(status="unavailable", message=result.error or "Ensemble unavailable")
-
-    # Mock ensemble analysis
-    # In real implementation, would fetch all 64 members and compute
-    import random
-    random.seed(int(latitude * 100 + longitude * 100))
-
-    if operation == "exceedance_count":
-        # Simulate 64 members
-        members = [random.uniform(0, 5) for _ in range(64)]
-        exceed = sum(1 for m in members if m >= threshold)
-        prob = exceed / len(members) * 100
-
+    if operation != "exceedance_count":
+        return _envelope(status="unsupported", message=f"Unsupported operation {operation}")
+    try:
+        from services.weathernext_gcs import get_gcs_adapter
+        payload = get_gcs_adapter().query_ensemble(latitude, longitude, variable=variable)
+        member_values = payload.get("member_values") or []
+        # A member trajectory can be nested [member][time].  This tool answers
+        # the first bounded lead only; it never invents members or probabilities.
+        first_values = []
+        for value in member_values[:64]:
+            if isinstance(value, list):
+                value = value[0] if value else None
+            try:
+                if value is not None:
+                    first_values.append(float(value))
+            except (TypeError, ValueError):
+                continue
+        if not first_values:
+            return _envelope(status="unavailable", message="No member values returned by the GCS ensemble")
+        exceed = sum(1 for value in first_values if value >= threshold)
+        probability = exceed / len(first_values) * 100.0
         return _envelope(
             status="ok",
-            data={
-                "variable": variable,
-                "threshold": threshold,
-                "interval_hours": interval_hours,
-                "exceedance_count": exceed,
-                "total_members": len(members),
-                "probability_percent": round(prob, 1),
-                "members_sample": members[:5],
-                "method": "member exceedance count, not calibrated probability",
-            },
+            data={"variable": variable, "threshold": threshold, "interval_hours": interval_hours,
+                  "exceedance_count": exceed, "total_members": len(first_values),
+                  "probability_percent": round(probability, 1), "members_sample": first_values[:5],
+                  "method": "empirical first-lead member exceedance count"},
             effective_query={"lat": latitude, "lon": longitude, "variable": variable, "threshold": threshold},
-            member_counts={"expected": 64, "valid": 64},
+            source=[payload.get("surface", "gcs_ensemble")],
+            member_counts={"expected": payload.get("members", 64), "valid": len(first_values)},
+            provenance=payload,
             evidence_id=f"ensemble_{variable}_{latitude:.2f}_{longitude:.2f}",
-            warnings=["Empirical ensemble probability, not automatically calibrated truth"],
         )
-
-    return _envelope(status="unsupported", message=f"Unsupported operation {operation}")
+    except Exception as exc:
+        return _envelope(status="unavailable", message=str(exc),
+                         fallback_reasons=[{"surface": "gcs_ensemble", "reason": getattr(exc, "code", "query_failed")}])
 
 
 @tool
@@ -376,20 +357,23 @@ def get_weathernext_map_layer(
     if not cfg.enabled:
         return _envelope(status="not_granted", message="WeatherNext disabled")
 
-    # Check if tiling is permitted - requires distribution checks
-    return _envelope(
-        status="ok",
-        data={
-            "variable": variable,
-            "run_id": run_id,
-            "valid_time": valid_time,
-            "level": level,
-            "statistic": statistic,
-            "tile_url_template": f"/v2/weather/tiles/{variable}/{run_id}/{{z}}/{{x}}/{{y}}.png",
-            "note": "Tile service requires authorized mapping adapter and permission checks",
-        },
-        warnings=["Public serving conditional on rights, no raw public-data bypass"],
-    )
+    try:
+        from services.weathernext_ee import get_ee_adapter
+        tile_url = get_ee_adapter().get_tile_url(variable, run_id, statistic=statistic)
+        return _envelope(
+            status="ok",
+            data={
+                "variable": variable, "run_id": run_id, "valid_time": valid_time,
+                "level": level, "statistic": statistic,
+                "tile_url_template": f"/v2/weather/tiles/{variable}/{run_id}/{{z}}/{{x}}/{{y}}.png",
+                "earth_engine_tile_source": "configured",
+            },
+            source=["earth_engine"],
+            provenance={"surface": "earth_engine", "model_version": "3.0.0", "is_ensemble": True},
+        )
+    except Exception as exc:
+        return _envelope(status="unavailable", message=str(exc),
+                         fallback_reasons=[{"surface": "earth_engine", "reason": getattr(exc, "code", "query_failed")}])
 
 
 @tool

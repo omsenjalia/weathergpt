@@ -22,11 +22,12 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Query, HTTPException, Depends
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import Response
 
 from services.forecast import get_forecast_service
 from services.forecast_models import ProviderName, SELECTION_POLICY_VERSION
 from services.forecast_aggregation import build_precip_next_24h, build_temperature_spread
-from services.weathernext_catalog import get_catalog
+from services.weathernext_catalog import get_catalog, surface_access_manifest
 from services.config import get_config
 from services.forecast_cache import get_cache
 
@@ -57,6 +58,7 @@ async def get_weather_v2(
     mode: str = Query("everyone", description="everyone|farmer|researcher"),
     requested_source: str = Query("", description="auto|imd|weathernext|accuweather|open_meteo (preferred name)"),
     source: str = Query("auto", description="Legacy alias for requested_source"),
+    model: str = Query("weathernext_3", description="weathernext_3|weathernext_2 when requested_source=weathernext"),
     run_id: str = Query("", description="Pin a WeatherNext run, e.g. weathernext_3_0_0_2026091900"),
     forecast_days: int = Query(3, ge=1, le=15),
     language: str = Query("en"),
@@ -70,6 +72,11 @@ async def get_weather_v2(
     """
     mode = _validate_mode(mode)
     effective_source = _resolve_source(requested_source, source)
+    normalized_model = (model or "weathernext_3").strip().lower().replace("-", "_")
+    if normalized_model not in {"weathernext_2", "weathernext_3", "wn2", "wn3", "2", "3"}:
+        raise HTTPException(status_code=400, detail="model must be weathernext_2 or weathernext_3")
+    if effective_source != "weathernext":
+        normalized_model = "weathernext_3"
 
     def _fetch():
         service = get_forecast_service()
@@ -81,6 +88,7 @@ async def get_weather_v2(
             mode=mode,
             forecast_days=forecast_days,
             run_id=run_id or None,
+            model=normalized_model,
         )
 
         if not result.forecast:
@@ -90,6 +98,7 @@ async def get_weather_v2(
                 "status": "unavailable",
                 "mode": mode,
                 "requested_source": effective_source,
+                "model": normalized_model,
                 "selected_source": "unavailable",
                 "selection_policy_version": SELECTION_POLICY_VERSION,
                 "error": result.error,
@@ -97,6 +106,7 @@ async def get_weather_v2(
                 "tried_providers": result.tried_providers,
                 "provenance": {
                     "requested_source": effective_source,
+                    "model": normalized_model,
                     "selected_source": "unavailable",
                     "fallback_reasons": result.fallback_reasons,
                     "tried_providers": result.tried_providers,
@@ -113,6 +123,7 @@ async def get_weather_v2(
             "schema_version": forecast.schema_version,
             "status": "ok",
             "mode": mode,
+            "model": forecast.provenance.model,
             "location": forecast.location,
             "current": forecast.current.to_dict() if forecast.current else None,
             "hourly": [p.to_dict() for p in forecast.hourly[:24]],
@@ -164,6 +175,7 @@ async def get_catalog_endpoint(
         "total": len(records),
         "filtered": len(records),
         "coverage": catalog.coverage_report(),
+        "surface_access": surface_access_manifest(),
         "capabilities": [
             {
                 "capability_id": r.capability_id,
@@ -184,7 +196,7 @@ async def get_catalog_endpoint(
                 "langgraph_tool": r.langgraph_tool,
                 "blocker": r.blocker,
             }
-            for r in records[:100]
+            for r in records
         ],
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -210,6 +222,7 @@ async def get_series(
     start_time: str = Query("", description="Valid time start ISO"),
     end_time: str = Query("", description="Valid time end ISO"),
     forecast_days: int = Query(7, ge=1, le=15),
+    model: str = Query("weathernext_3", description="weathernext_2|weathernext_3"),
     mode: str = Query("researcher"),
     requested_source: str = Query("weathernext", description="Series is a WeatherNext product; other values are rejected"),
 ) -> dict[str, Any]:
@@ -226,6 +239,9 @@ async def get_series(
             raise HTTPException(status_code=403, detail="Variable requires researcher mode")
     if requested_source and requested_source.lower() != "weathernext":
         raise HTTPException(status_code=400, detail="series is only served from weathernext")
+    normalized_model = (model or "weathernext_3").lower().replace("-", "_")
+    if normalized_model not in {"weathernext_2", "weathernext_3", "wn2", "wn3", "2", "3"}:
+        raise HTTPException(status_code=400, detail="model must be weathernext_2 or weathernext_3")
     if statistic not in ("mean", "p10", "p25", "p50", "p75", "p90"):
         raise HTTPException(status_code=400, detail="statistic must be mean|p10|p25|p50|p75|p90")
 
@@ -257,6 +273,7 @@ async def get_series(
             mode=mode,
             forecast_days=forecast_days,
             run_id=run_id or None,
+            model=normalized_model,
         )
         if not result.forecast:
             return {
@@ -331,20 +348,18 @@ async def get_profile(
     valid_time: str = Query(..., description="Valid time ISO"),
     variables: str = Query("temperature,u_component_of_wind,v_component_of_wind", description="Comma-separated"),
     levels: str = Query("850,500,250", description="Comma-separated hPa levels"),
+    model: str = Query("weathernext_3", description="weathernext_2|weathernext_3"),
     mode: str = Query("researcher"),
 ) -> dict[str, Any]:
     """One location/valid time, selected upper-air fields/levels."""
     mode = _validate_mode(mode)
     if mode != "researcher":
         raise HTTPException(status_code=403, detail="Profile requires researcher mode")
+    normalized_model = (model or "weathernext_3").lower().replace("-", "_")
+    if normalized_model not in {"weathernext_2", "weathernext_3", "wn2", "wn3", "2", "3"}:
+        raise HTTPException(status_code=400, detail="model must be weathernext_2 or weathernext_3")
 
     def _fetch():
-        service = get_forecast_service()
-        result = service.select_forecast(lat=lat, lon=lon, product="profile", requested_source="weathernext", mode=mode)
-        if not result.forecast:
-            return {"status": "unavailable", "error": result.error, "fallback_reasons": result.fallback_reasons}
-
-        # Mock profile as in tools
         try:
             level_list = [int(x.strip()) for x in levels.split(",") if x.strip()]
         except ValueError:
@@ -354,29 +369,27 @@ async def get_profile(
         invalid = [l for l in level_list if l not in PRESSURE_LEVELS]
         if invalid:
             raise HTTPException(status_code=400, detail=f"Unsupported levels {invalid}, allowed {PRESSURE_LEVELS}")
-
         var_list = [v.strip() for v in variables.split(",") if v.strip()]
-        profile = []
-        for lvl in level_list:
-            entry = {"level_hpa": lvl}
-            for var in var_list:
-                if "temperature" in var:
-                    entry[var] = 15 - (1000 - lvl) * 0.05
-                elif "wind" in var:
-                    entry[var] = 10 + lvl * 0.01
-                else:
-                    entry[var] = None
-            profile.append(entry)
-
-        return {
-            "schema_version": "2.0.0",
-            "location": {"lat": lat, "lon": lon},
-            "valid_time": valid_time,
-            "variables": var_list,
-            "levels": level_list,
-            "profile": profile,
-            "provenance": result.forecast.provenance.to_dict(),
-        }
+        try:
+            from services.weathernext_bigquery import parse_run_id
+            from services.weathernext_gcs import WeatherNextGCSQueryError, get_gcs_adapter
+            payload = get_gcs_adapter().query_profile(
+                lat, lon, variables=var_list, levels=level_list,
+                model=normalized_model, run_id=valid_time or "",
+            )
+            return {
+                "schema_version": "2.0.0", "status": "ok",
+                "location": {"lat": lat, "lon": lon}, "valid_time": valid_time,
+                "variables": var_list, "levels": level_list,
+                "profile": payload["profile"],
+                "provenance": {
+                    "surface": payload.get("surface"), "bucket": payload.get("bucket"),
+                    "model_version": payload.get("model_version"), "is_ensemble": True,
+                },
+            }
+        except WeatherNextGCSQueryError as exc:
+            return {"status": "unavailable", "error": str(exc),
+                    "fallback_reasons": [{"surface": "gcs_ensemble", "reason": exc.code}]}
 
     return await run_in_threadpool(_fetch)
 
@@ -385,31 +398,46 @@ async def get_profile(
 async def get_ensemble(
     lat: float = Query(..., ge=-90, le=90),
     lon: float = Query(..., ge=-180, le=180),
-    variable: str = Query("total_precipitation_1hr"),
+    variable: str = Query("temperature_2m"),
     run_id: str = Query(""),
+    model: str = Query("weathernext_3"),
     mode: str = Query("researcher"),
 ) -> dict[str, Any]:
-    """Selected member series for bounded scientific requests; restricted authorization."""
+    """Return a bounded point extract from the full GCS ensemble Zarr."""
     mode = _validate_mode(mode)
     if mode != "researcher":
         raise HTTPException(status_code=403, detail="Ensemble requires researcher mode and authorization")
+    if (model or "").lower().replace("-", "_") not in {"weathernext_2", "weathernext_3", "wn2", "wn3", "2", "3"}:
+        raise HTTPException(status_code=400, detail="model must be weathernext_2 or weathernext_3")
 
     def _fetch():
-        service = get_forecast_service()
-        result = service.select_forecast(lat=lat, lon=lon, product="ensemble", requested_source="weathernext", mode=mode)
-        if not result.forecast:
-            return {"status": "unavailable", "error": result.error}
-
-        # Bounded: max 64 members, max 168 time steps
-        return {
-            "schema_version": "2.0.0",
-            "variable": variable,
-            "run_id": result.forecast.provenance.run_id,
-            "members": 64,
-            "note": "Member data is bounded; full global export requires job",
-            "sample": result.forecast.ensemble,
-            "provenance": result.forecast.provenance.to_dict(),
-        }
+        try:
+            from services.weathernext_gcs import WeatherNextGCSQueryError, get_gcs_adapter
+            payload = get_gcs_adapter().query_ensemble(lat, lon, variable=variable, model=model, run_id=run_id)
+            return {
+                "schema_version": "2.0.0",
+                "status": "ok",
+                "variable": variable,
+                "model": payload.get("model"),
+                "model_version": payload.get("model_version"),
+                "run_id": payload.get("run_id") or run_id or None,
+                "members": payload.get("members", 0),
+                "member_values": payload.get("member_values", []),
+                "units": payload.get("units"),
+                "surface": payload.get("surface"),
+                "bucket": payload.get("bucket"),
+                "note": "Bounded point extract; full regional export requires a confirmed job",
+                "provenance": {
+                    "surface": payload.get("surface"),
+                    "bucket": payload.get("bucket"),
+                    "model_version": payload.get("model_version"),
+                    "is_ensemble": True,
+                },
+            }
+        except WeatherNextGCSQueryError as exc:
+            return {"status": "unavailable", "error": str(exc), "fallback_reasons": [{"surface": "gcs_ensemble", "reason": exc.code}]}
+        except Exception as exc:
+            return {"status": "unavailable", "error": type(exc).__name__, "fallback_reasons": [{"surface": "gcs_ensemble", "reason": "query_failed"}]}
 
     return await run_in_threadpool(_fetch)
 
@@ -421,22 +449,26 @@ async def get_tile(
     z: int,
     x: int,
     y: int,
-) -> dict[str, Any]:
-    """Run-keyed authorized map tiles, only if permitted."""
-    # Check permission and distribution rights
-    cfg = get_config().weathernext
-    if not cfg.enabled:
+    model: str = Query("weathernext_3"),
+    high_resolution: bool = Query(False),
+    statistic: str = Query("mean"),
+):
+    """Proxy an authorized Earth Engine WeatherNext map tile as PNG bytes."""
+    if not get_config().weathernext.enabled:
         raise HTTPException(status_code=403, detail="WeatherNext disabled")
-
-    # In real implementation, would generate tile from Zarr
-    # For now, return placeholder indicating tile service
-    return {
-        "status": "planned",
-        "variable": variable,
-        "run_id": run_id,
-        "tile": f"{z}/{x}/{y}",
-        "message": "Tile generation requires authorized mapping adapter and EE/BQ/GCS access",
-    }
+    try:
+        from services.weathernext_ee import WeatherNextEEError, get_ee_adapter
+        content = await run_in_threadpool(
+            lambda: get_ee_adapter().get_tile(
+                variable, run_id, z, x, y, model=model,
+                high_resolution=high_resolution, statistic=statistic,
+            )
+        )
+        return Response(content=content, media_type="image/png", headers={"Cache-Control": "public, max-age=300"})
+    except WeatherNextEEError as exc:
+        # A map tile must not silently become a fake image.  JSON explains the
+        # missing entitlement/dependency to the Explore client and operator.
+        raise HTTPException(status_code=503, detail={"status": "unavailable", "reason": exc.code, "message": str(exc)})
 
 
 @router.get("/cyclones")
@@ -567,13 +599,29 @@ async def weather_health() -> dict[str, Any]:
     except Exception as exc:  # pragma: no cover - diagnostics must never fail the endpoint
         weathernext_bigquery = {"error": type(exc).__name__}
 
+    gcs_health = None
+    ee_health = None
+    try:
+        from services.weathernext_gcs import get_gcs_adapter
+        gcs_health = get_gcs_adapter().stats()
+    except Exception as exc:
+        gcs_health = {"error": type(exc).__name__}
+    try:
+        from services.weathernext_ee import get_ee_adapter
+        ee_health = get_ee_adapter().health()
+    except Exception as exc:
+        ee_health = {"error": type(exc).__name__}
+
     return {
         "status": "ok",
         "selection_policy_version": SELECTION_POLICY_VERSION,
         "provider_priority": get_config().provider_priority,
         "provider_health": provider_health,
+        "surface_access": surface_access_manifest(),
         "weathernext_auth": get_credentials_factory_status(),
         "weathernext_bigquery": weathernext_bigquery,
+        "weathernext_gcs": gcs_health,
+        "weathernext_earth_engine": ee_health,
         "cache": cache.stats(),
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }

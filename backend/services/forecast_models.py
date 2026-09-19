@@ -145,7 +145,10 @@ class ForecastProvenance:
     coverage_completeness: Optional[float] = None  # 0..1
     # Additive metadata (all optional, safe for existing clients)
     horizon_hours: Optional[int] = None            # forecast horizon actually present in this payload
+    surface: Optional[str] = None                  # bigquery, gcs_statistics, gcs_ensemble, earth_engine
     table: Optional[str] = None                    # BigQuery table / dataset identifier the data came from
+    bucket: Optional[str] = None                   # GCS bucket/root when applicable
+    is_ensemble: bool = False
     query_diagnostics: Optional[dict] = None       # bytes billed/processed, cache hit, job id (no secrets)
     methods: dict = field(default_factory=dict)    # how derived fields were computed (honest labelling)
 
@@ -176,7 +179,10 @@ class ForecastProvenance:
             "valid_member_count": self.valid_member_count,
             "coverage_completeness": self.coverage_completeness,
             "horizon_hours": self.horizon_hours,
+            "surface": self.surface,
             "table": self.table,
+            "bucket": self.bucket,
+            "is_ensemble": self.is_ensemble,
             "query_diagnostics": self.query_diagnostics,
             "methods": self.methods,
         }

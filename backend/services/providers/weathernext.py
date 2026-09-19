@@ -66,7 +66,9 @@ _NON_TRANSIENT_CODES = {
     "schema_mismatch",
     "bytes_billed_limit_exceeded",
     "missing_dependency_bigquery",
+    "missing_dependency_gcs",
     "no_candidate_run",
+    "surface_chain_exhausted",
 }
 
 _ERROR_CODE_BY_REASON = {
@@ -173,20 +175,12 @@ class WeatherNextProvider(BaseForecastProvider):
                 # Cache failures are non-fatal
                 pass
 
-        # Attempt actual WeatherNext fetch based on surface
+        # WeatherNext itself has a surface fallback chain.  This is separate
+        # from ForecastService's provider fallback: preferred WN3 BigQuery is
+        # followed by WN3 statistics Zarr, then WN2 BigQuery and WN2 statistics
+        # Zarr before AccuWeather/Open-Meteo are considered.
         try:
-            if cfg.surface == "bigquery":
-                return self._fetch_bigquery(lat, lon, product, start, **kwargs)
-            elif cfg.surface == "gcs_statistics":
-                return self._fetch_gcs_statistics(lat, lon, product, start, **kwargs)
-            else:
-                return ProviderResult(
-                    success=False,
-                    error=f"Unknown surface: {cfg.surface}",
-                    error_code="invalid_config",
-                    fallback_reason={"provider": self.name.value, "reason": f"unknown_surface_{cfg.surface}"},
-                    latency_ms=(time.perf_counter() - start) * 1000,
-                )
+            return self._fetch_surface_chain(lat, lon, product, start, **kwargs)
         except Exception as exc:
             self.record_failure()
             return ProviderResult(
@@ -202,19 +196,86 @@ class WeatherNextProvider(BaseForecastProvider):
             )
 
     # ------------------------------------------------------------------
+    # WeatherNext surface chain
+    # ------------------------------------------------------------------
+
+    def _fetch_surface_chain(self, lat: float, lon: float, product: str, start_time: float, **kwargs) -> ProviderResult:
+        requested_model = (kwargs.get("model") or "weathernext_3").lower().replace("-", "_")
+        if requested_model in {"weathernext_3", "wn3", "3", "3.0.0", "weathernext_3_0_0"}:
+            chain = [("weathernext_3", "bigquery"), ("weathernext_3", "gcs_statistics"),
+                     ("weathernext_2", "bigquery"), ("weathernext_2", "gcs_statistics")]
+        elif requested_model in {"weathernext_2", "wn2", "2", "2.0.0", "weathernext_2_0_0"}:
+            chain = [("weathernext_2", "bigquery"), ("weathernext_2", "gcs_statistics")]
+        else:
+            return ProviderResult(success=False, error=f"Unsupported WeatherNext model: {requested_model}",
+                                  error_code="unsupported_model",
+                                  fallback_reason={"provider": self.name.value, "reason": "unsupported_model", "model": requested_model},
+                                  latency_ms=(time.perf_counter() - start_time) * 1000)
+
+        attempts: list[dict] = []
+        for model, surface in chain:
+            child_kwargs = {**kwargs, "model": model}
+            if surface == "bigquery":
+                result = self._fetch_bigquery(lat, lon, product, start_time, **child_kwargs)
+            else:
+                result = self._fetch_gcs_statistics(lat, lon, product, start_time, **child_kwargs)
+            if result.success:
+                if result.forecast:
+                    result.forecast.provenance.fallback_reasons.extend(attempts)
+                if attempts:
+                    result.fallback_reason = {
+                        "provider": self.name.value,
+                        "reason": "surface_fallback",
+                        "selected_surface": surface,
+                        "selected_model": model,
+                        "attempts": attempts,
+                    }
+                return result
+            reason = dict(result.fallback_reason or {})
+            reason.setdefault("provider", self.name.value)
+            reason.setdefault("model", model)
+            reason.setdefault("surface", surface)
+            attempts.append(reason)
+
+        if any(attempt.get("reason") not in _NON_TRANSIENT_CODES for attempt in attempts):
+            self.record_failure()
+        # Keep the first actionable reason at the top level for existing mobile
+        # clients (for example live_credentials_required/table_not_found), while
+        # retaining every attempted surface for operator diagnostics.
+        failure = dict(attempts[0]) if attempts else {
+            "provider": self.name.value, "reason": "surface_chain_exhausted", "model": requested_model,
+        }
+        failure.setdefault("provider", self.name.value)
+        failure.setdefault("model", requested_model)
+        failure["attempts"] = attempts
+        failure["chain_error"] = "surface_chain_exhausted"
+        return ProviderResult(
+            success=False,
+            error="All WeatherNext surfaces unavailable",
+            error_code=failure.get("reason", "weathernext_surfaces_unavailable"),
+            fallback_reason=failure,
+            latency_ms=(time.perf_counter() - start_time) * 1000,
+        )
+
+    # ------------------------------------------------------------------
     # BigQuery surface (live)
     # ------------------------------------------------------------------
 
     def _cache_key(self, lat: float, lon: float, product: str, **kwargs) -> Optional[str]:
         cfg = get_config().weathernext
-        if cfg.surface != "bigquery" or not cfg.bq.surface_table:
+        model = kwargs.get("model", "weathernext_3")
+        try:
+            table = cfg.bq.table_for(model)
+        except ValueError:
             return None
-        res = 0.05 if "0p05" in cfg.bq.surface_table else 0.1
+        if not table:
+            return None
+        res = 0.05 if "0p05" in table else 0.1
         cell_lat = round(round(lat / res) * res, 3)
         cell_lon = round(round(lon / res) * res, 3)
         horizon = self._horizon_hours(**kwargs)
-        table_short = cfg.bq.surface_table.rsplit(".", 1)[-1]
-        return f"weathernext:{table_short}:{cfg.bq.column_profile}:{cell_lat}:{cell_lon}:{horizon}"
+        table_short = table.rsplit(".", 1)[-1]
+        return f"weathernext:{model}:{table_short}:{cfg.bq.column_profile}:{cell_lat}:{cell_lon}:{horizon}"
 
     def _horizon_hours(self, **kwargs) -> int:
         cfg = get_config().weathernext
@@ -264,7 +325,11 @@ class WeatherNextProvider(BaseForecastProvider):
     def _fetch_bigquery(self, lat: float, lon: float, product: str, start_time: float, **kwargs) -> ProviderResult:
         """Bounded point query against the WeatherNext 3 BigQuery surface table."""
         cfg = get_config().weathernext
-        table = cfg.bq.surface_table
+        model = kwargs.get("model", "weathernext_3")
+        try:
+            table = cfg.bq.table_for(model)
+        except ValueError:
+            table = None
 
         # Offline synthetic data for tests / demos - clearly labelled, never live.
         if os.getenv("WEATHERNEXT_MOCK_DATA", "0") == "1":
@@ -283,7 +348,10 @@ class WeatherNextProvider(BaseForecastProvider):
 
         try:
             adapter = get_bigquery_adapter()
-            result = adapter.fetch_point_forecast(lat, lon, horizon_hours=horizon, run_id=kwargs.get("run_id") or None)
+            result = adapter.fetch_point_forecast(
+                lat, lon, horizon_hours=horizon, run_id=kwargs.get("run_id") or None,
+                model=model, high_resolution=bool(kwargs.get("high_resolution", False)),
+            )
         except CredentialsUnavailable as exc:
             return self._failure(
                 exc.code, str(exc), start_time, table=table, transient=False,
@@ -330,38 +398,63 @@ class WeatherNextProvider(BaseForecastProvider):
         )
 
     def _fetch_gcs_statistics(self, lat: float, lon: float, product: str, start_time: float, **kwargs) -> ProviderResult:
-        """Fetch from GCS statistics Zarr."""
-        # Similar to BigQuery - check dependencies
+        """Fetch the WN2/WN3 statistics Zarr and normalize it like BigQuery."""
+        model = kwargs.get("model", "weathernext_3")
+        cfg = get_config().weathernext
         try:
-            import xarray  # type: ignore
-            import zarr  # type: ignore
-        except ImportError:
+            from services.weathernext_gcs import WeatherNextGCSQueryError, get_gcs_adapter
+            from services.weathernext_normalize import normalize_point_forecast
+            raw = get_gcs_adapter().fetch_point_forecast(
+                lat, lon, model=model, horizon_hours=self._horizon_hours(**kwargs),
+                run_id=kwargs.get("run_id") or None,
+            )
+            normalized = normalize_point_forecast(
+                raw,
+                lat=lat,
+                lon=lon,
+                requested_source=kwargs.get("requested_source", "auto"),
+                mode=kwargs.get("mode", "everyone"),
+                forecast_days=int(kwargs.get("forecast_days") or 7),
+                freshness_hours=cfg.run_policy.freshness_hours,
+            )
+            self.record_success()
+            return ProviderResult(
+                success=True,
+                forecast=normalized,
+                latency_ms=(time.perf_counter() - start_time) * 1000,
+            )
+        except WeatherNextGCSQueryError as exc:
             return ProviderResult(
                 success=False,
-                error="GCS/Zarr dependencies not installed (xarray, zarr)",
-                error_code="unavailable",
+                error=str(exc),
+                error_code=exc.code,
                 fallback_reason={
                     "provider": self.name.value,
-                    "reason": "missing_dependency_gcs",
+                    "reason": exc.code,
                     "surface": "gcs_statistics",
+                    "model": model,
+                    "bucket": cfg.gcs.root_for(model, statistics=True),
+                    "message": str(exc)[:200],
+                    **exc.details,
                 },
                 latency_ms=(time.perf_counter() - start_time) * 1000,
             )
-
-        if os.getenv("WEATHERNEXT_MOCK_DATA", "0") == "1":
-            return self._mock_forecast(lat, lon, product, start_time, **kwargs)
-
-        return ProviderResult(
-            success=False,
-            error="GCS statistics surface requires live Google credentials and bucket access",
-            error_code="unavailable",
-            fallback_reason={
-                "provider": self.name.value,
-                "reason": "live_credentials_required",
-                "surface": "gcs_statistics",
-            },
-            latency_ms=(time.perf_counter() - start_time) * 1000,
-        )
+        except ImportError as exc:
+            return ProviderResult(
+                success=False,
+                error=str(exc),
+                error_code="missing_dependency_gcs",
+                fallback_reason={"provider": self.name.value, "reason": "missing_dependency_gcs", "surface": "gcs_statistics", "model": model},
+                latency_ms=(time.perf_counter() - start_time) * 1000,
+            )
+        except Exception as exc:
+            return ProviderResult(
+                success=False,
+                error=str(exc),
+                error_code=f"gcs_{type(exc).__name__}",
+                fallback_reason={"provider": self.name.value, "reason": f"gcs_{type(exc).__name__}", "surface": "gcs_statistics", "model": model, "message": str(exc)[:200]},
+                latency_ms=(time.perf_counter() - start_time) * 1000,
+            )
 
     def _get_credentials(self):
         """Backward-compatible helper: (CredentialBundle | None, error | None)."""

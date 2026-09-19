@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import math
+import os
 import re
 import threading
 import time
@@ -43,6 +44,16 @@ MODEL_ID = "weathernext_3_0_0"
 MODEL_VERSION = "3.0.0"
 ENSEMBLE_MEMBERS = 64
 INTERIM_RUN_HORIZON_HOURS = 48
+
+# Public aliases from the deployment plan.  Runtime configuration is resolved
+# through ``get_config().weathernext.bq.table_for`` so tests and serverless
+# instances can change env vars without re-importing this module.
+TABLES = {
+    "wn3_0p1": os.getenv("WEATHERNEXT_TABLE_3") or os.getenv("WEATHERNEXT_TABLE") or "cool-archery-296710.weathernext.weathernext_3_0_0_0p1deg",
+    "wn3_0p05": os.getenv("WEATHERNEXT_TABLE_3_HR") or "cool-archery-296710.weathernext.weathernext_3_0_0_0p05deg",
+    "wn2_0p1": os.getenv("WEATHERNEXT_TABLE_2") or "cool-archery-296710.weathernext.weathernext_2_0_0_0p1deg",
+    "wn2_mean": os.getenv("WEATHERNEXT_TABLE_2") or "cool-archery-296710.weathernext.weathernext_2_0_0_0p1deg",
+}
 
 _TABLE_RE = re.compile(r"^[A-Za-z0-9_\-]+\.[A-Za-z0-9_]+\.[A-Za-z0-9_]+$")
 _COLUMN_RE = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -101,14 +112,19 @@ class PointForecastResult:
     diagnostics: QueryDiagnostics
     attempted_inits: list[str] = field(default_factory=list)
     credential_source: Optional[str] = None
+    # Surface/model metadata is kept on the raw result so normalization can
+    # preserve provenance for WN2, WN3, BigQuery, and GCS uniformly.
+    model_id: str = MODEL_ID
+    model_version: str = MODEL_VERSION
+    surface: str = "bigquery"
 
     @property
     def run_id(self) -> str:
-        return run_id_for(self.init_time)
+        return run_id_for(self.init_time, self.model_id)
 
 
-def run_id_for(init_time: datetime) -> str:
-    return f"{MODEL_ID}_{init_time.astimezone(timezone.utc):%Y%m%d%H}"
+def run_id_for(init_time: datetime, model: str = "weathernext_3_0_0") -> str:
+    return f"{model}_{init_time.astimezone(timezone.utc):%Y%m%d%H}"
 
 
 def parse_run_id(run_id: str) -> Optional[datetime]:
@@ -117,7 +133,7 @@ def parse_run_id(run_id: str) -> Optional[datetime]:
         return None
     text = run_id.strip()
     m = _RUN_ID_RE.search(text)
-    if m and (text.startswith(MODEL_ID) or text.isdigit()):
+    if m and (text.startswith("weathernext_3_0_0") or text.startswith("weathernext_2_0_0") or text.isdigit()):
         y, mo, d, h = (int(g) for g in m.groups())
         try:
             return datetime(y, mo, d, h, tzinfo=timezone.utc)
@@ -410,10 +426,13 @@ class WeatherNextBigQueryAdapter:
             log_event("WARN", f"WeatherNext BigQuery query failed: {err.code}", {"message": str(err)[:200]})
             raise err from exc
 
-    def _effective_table(self, table: Optional[str]) -> str:
-        chosen = table or self.cfg.bq.surface_table
+    def _effective_table(self, table: Optional[str], model: str = "weathernext_3", *, high_resolution: bool = False) -> str:
+        try:
+            chosen = table or self.cfg.bq.table_for(model, high_resolution=high_resolution)
+        except ValueError as exc:
+            raise WeatherNextQueryError("unsupported_model", str(exc)) from exc
         if not chosen:
-            raise WeatherNextQueryError("table_not_configured", "WEATHERNEXT_BQ_SURFACE_TABLE (alias WEATHERNEXT_TABLE) is not set")
+            raise WeatherNextQueryError("table_not_configured", f"No BigQuery table configured for {model}")
         return chosen
 
     def fetch_point_forecast(
@@ -424,10 +443,13 @@ class WeatherNextBigQueryAdapter:
         horizon_hours: int = 72,
         run_id: Optional[str] = None,
         table: Optional[str] = None,
+        model: str = "weathernext_3",
+        high_resolution: bool = False,
+        columns: Optional[tuple[str, ...]] = None,
     ) -> PointForecastResult:
-        """Nearest-cell forecast for the newest available run (or ``run_id``)."""
+        """Nearest-cell forecast for the newest available WN2/WN3 run."""
         cfg = self.cfg
-        table_id = self._effective_table(table)
+        table_id = self._effective_table(table, model, high_resolution=high_resolution)
         policy = cfg.run_policy
         horizon = max(1, min(int(horizon_hours), policy.max_horizon_hours))
         now = self._clock()
@@ -447,11 +469,13 @@ class WeatherNextBigQueryAdapter:
         last_diag: Optional[QueryDiagnostics] = None
         for init_time in candidates:
             allowed_horizon = min(horizon, run_horizon_hours(init_time, policy.max_horizon_hours))
+            selected_columns = columns or cfg.bq.columns
             sql, params = build_point_query(
-                table_id, cfg.bq.columns, lat, lon, init_time, allowed_horizon, cfg.bq.nearest_radius_km
+                table_id, selected_columns, lat, lon, init_time, allowed_horizon, cfg.bq.nearest_radius_km
             )
             rows, diag = self.run_query(sql, params)
-            attempted.append(run_id_for(init_time))
+            model_id = "weathernext_2_0_0" if model.lower().replace("-", "_") in {"weathernext_2", "weathernext_2_0_0", "wn2", "2", "2.0.0"} else "weathernext_3_0_0"
+            attempted.append(run_id_for(init_time, model_id))
             last_diag = diag
             if not rows:
                 continue  # partition not delivered yet (or cell missing) - try an older run
@@ -469,11 +493,14 @@ class WeatherNextBigQueryAdapter:
                 cell_lon=float(row.get("cell_lon")),
                 distance_km=round(distance_m / 1000.0, 3),
                 resolution_deg=resolution_for_table(table_id),
-                columns=cfg.bq.columns,
+                columns=selected_columns,
                 steps=steps,
                 diagnostics=diag,
                 attempted_inits=attempted,
                 credential_source=self._client_source,
+                model_id=("weathernext_2_0_0" if model.lower().replace("-", "_") in {"weathernext_2", "wn2", "2", "2.0.0"} else "weathernext_3_0_0"),
+                model_version=("2.0.0" if model.lower().replace("-", "_") in {"weathernext_2", "wn2", "2", "2.0.0"} else "3.0.0"),
+                surface="bigquery",
             )
 
         raise WeatherNextQueryError(
@@ -481,6 +508,24 @@ class WeatherNextBigQueryAdapter:
             "No WeatherNext run with data for this location within the run policy window",
             {"attempted_runs": attempted, "last_query": last_diag.to_dict() if last_diag else None},
         )
+
+    def query_wn3_point(self, lat: float, lon: float, init_time: Optional[datetime] = None, **kwargs) -> PointForecastResult:
+        run_id = run_id_for(init_time) if init_time else kwargs.pop("run_id", None)
+        return self.fetch_point_forecast(lat, lon, model="weathernext_3", run_id=run_id, **kwargs)
+
+    def query_wn3_mean_point(self, lat: float, lon: float, init_time: Optional[datetime] = None, **kwargs) -> PointForecastResult:
+        run_id = run_id_for(init_time) if init_time else kwargs.pop("run_id", None)
+        mean_columns = tuple(c for c in self.cfg.bq.columns if c.endswith("_mean"))
+        return self.fetch_point_forecast(lat, lon, model="weathernext_3", run_id=run_id, columns=mean_columns, **kwargs)
+
+    def query_wn2_point(self, lat: float, lon: float, init_time: Optional[datetime] = None, **kwargs) -> PointForecastResult:
+        run_id = run_id_for(init_time, "weathernext_2_0_0") if init_time else kwargs.pop("run_id", None)
+        return self.fetch_point_forecast(lat, lon, model="weathernext_2", run_id=run_id, **kwargs)
+
+    def query_wn2_mean_point(self, lat: float, lon: float, init_time: Optional[datetime] = None, **kwargs) -> PointForecastResult:
+        run_id = run_id_for(init_time, "weathernext_2_0_0") if init_time else kwargs.pop("run_id", None)
+        mean_columns = tuple(c for c in self.cfg.bq.columns if c.endswith("_mean"))
+        return self.fetch_point_forecast(lat, lon, model="weathernext_2", run_id=run_id, columns=mean_columns, **kwargs)
 
     def estimate_point_query(self, lat: float, lon: float, *, horizon_hours: int = 72, table: Optional[str] = None) -> dict:
         """Dry-run cost estimate (upper bound before cluster pruning). Bills nothing."""
@@ -587,3 +632,27 @@ def set_bigquery_adapter(adapter: Optional[WeatherNextBigQueryAdapter]) -> None:
     global _adapter
     with _adapter_lock:
         _adapter = adapter
+
+
+def query_wn3_point(lat: float, lon: float, init_time: Optional[datetime] = None, **kwargs) -> PointForecastResult:
+    """Plan-compatible WN3 BigQuery point adapter."""
+    run_id = run_id_for(init_time) if init_time else kwargs.pop("run_id", None)
+    return get_bigquery_adapter().fetch_point_forecast(lat, lon, model="weathernext_3", run_id=run_id, **kwargs)
+
+
+def query_wn3_mean_point(lat: float, lon: float, init_time: Optional[datetime] = None, **kwargs) -> PointForecastResult:
+    """WN3 Mean is the statistics-only view of the same WN3 table."""
+    kwargs.setdefault("table", get_config().weathernext.bq.table_3 or get_config().weathernext.bq.surface_table)
+    run_id = run_id_for(init_time) if init_time else kwargs.pop("run_id", None)
+    return get_bigquery_adapter().query_wn3_mean_point(lat, lon, run_id=run_id, **kwargs)
+
+
+def query_wn2_point(lat: float, lon: float, init_time: Optional[datetime] = None, **kwargs) -> PointForecastResult:
+    """WN2 BigQuery point adapter used for historical/comparison requests."""
+    run_id = run_id_for(init_time, "weathernext_2_0_0") if init_time else kwargs.pop("run_id", None)
+    return get_bigquery_adapter().fetch_point_forecast(lat, lon, model="weathernext_2", run_id=run_id, **kwargs)
+
+
+def query_wn2_mean_point(lat: float, lon: float, init_time: Optional[datetime] = None, **kwargs) -> PointForecastResult:
+    run_id = run_id_for(init_time, "weathernext_2_0_0") if init_time else kwargs.pop("run_id", None)
+    return get_bigquery_adapter().query_wn2_mean_point(lat, lon, run_id=run_id, **kwargs)

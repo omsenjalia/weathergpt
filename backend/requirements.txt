@@ -10,8 +10,15 @@ pydantic
 psutil
 pytest
 google-cloud-bigquery>=3.25.0
+google-cloud-storage>=2.18.0
 google-auth>=2.35.0
 google-auth-oauthlib>=1.2.0
+# WeatherNext GCS Zarr and Earth Engine are lazy-imported at runtime, but are
+# installed in the deployed backend so all nine granted surfaces are available.
+xarray>=2024.10.0
+zarr>=2.18.3
+gcsfs>=2024.10.0
+earthengine-api>=1.4.0
 
 
 
