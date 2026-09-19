@@ -252,11 +252,15 @@ class NormalizedForecast:
     # Metadata
     schema_version: str = "2.0.0"
     mode: str = "everyone"  # everyone, farmer, researcher
+    # Per-field attribution when secondary providers filled null fields
+    # (services.forecast_supplement). Empty when nothing was supplemented.
+    field_sources: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
             "schema_version": self.schema_version,
             "mode": self.mode,
+            "field_sources": self.field_sources,
             "location": self.location,
             "current": self.current.to_dict() if self.current else None,
             "hourly": [p.to_dict() for p in self.hourly],
