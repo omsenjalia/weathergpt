@@ -8,9 +8,16 @@ jev_backend_plan.md section 6.
 Security:
 - No secrets are logged.
 - GOOGLE_APPLICATION_CREDENTIALS is a file path, not JSON.
+- GOOGLE_APPLICATION_CREDENTIALS_JSON (serverless-friendly) holds the service
+  account JSON *contents*; only its presence is recorded here, never the value.
 - OAuth requires client_id + secret + refresh_token; client_id alone fails validation.
 - Placeholder values starting with "your_" are treated as unset.
 - Disabled mode performs no Google authentication.
+
+Credential precedence (see services/weathernext_auth.get_bigquery_credentials):
+    1. GOOGLE_APPLICATION_CREDENTIALS_JSON  (service account JSON in env - Vercel)
+    2. GOOGLE_APPLICATION_CREDENTIALS       (file path) / ambient ADC
+    3. GOOGLE_OAUTH_CLIENT_ID + SECRET + REFRESH_TOKEN (owner-authorised OAuth)
 """
 
 from __future__ import annotations
@@ -66,6 +73,33 @@ def _int_env(key: str, default: int) -> int:
     except ValueError:
         return default
 
+def _float_env(key: str, default: float) -> float:
+    val = _get_env(key)
+    if val is None:
+        return default
+    try:
+        return float(val)
+    except ValueError:
+        return default
+
+def _hours_env(key: str, default: tuple[int, ...]) -> tuple[int, ...]:
+    """Parse a comma-separated list of UTC hours (e.g. "0,12"). Invalid -> default."""
+    val = _get_env(key)
+    if val is None:
+        return default
+    hours: list[int] = []
+    for part in val.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            hour = int(part)
+        except ValueError:
+            return default
+        if hour not in hours:
+            hours.append(hour)
+    return tuple(sorted(hours)) if hours else default
+
 # ---------------------------------------------------------------------------
 # WeatherNext config
 # ---------------------------------------------------------------------------
@@ -73,12 +107,76 @@ def _int_env(key: str, default: int) -> int:
 WeatherNextAuthMode = Literal["adc", "oauth"]
 WeatherNextSurface = Literal["bigquery", "gcs_statistics"]
 
+# Per-query byte cap. NOTE: BigQuery enforces maximum_bytes_billed against the
+# *pre-execution estimate*, which for clustered tables (WeatherNext is clustered
+# by geography) is an upper bound that ignores block pruning. A single-partition
+# point query on weathernext_3_0_0_0p1deg is estimated at several GiB per
+# selected leaf column even though the bytes actually billed are far smaller.
+# Too small a cap therefore rejects every query with bytesBilledLimitExceeded.
+DEFAULT_BQ_MAX_BYTES_BILLED = 100 * 1024 ** 3  # 100 GiB: blocks full-table scans, allows one partition
+
+# Leaf columns of the repeated `forecast` record read per profile. Every extra
+# leaf adds roughly one partition-column of estimated (and some actual) bytes.
+BQ_COLUMN_PROFILES: dict[str, tuple[str, ...]] = {
+    "minimal": (
+        "temperature_2m_mean",
+        "temperature_2m_p10",
+        "temperature_2m_p90",
+        "total_precipitation_1hr_mean",
+        "total_precipitation_1hr_p90",
+        "wind_speed_10m_mean",
+    ),
+    "standard": (
+        "temperature_2m_mean",
+        "temperature_2m_p10",
+        "temperature_2m_p90",
+        "dewpoint_temperature_2m_mean",
+        "total_precipitation_1hr_mean",
+        "total_precipitation_1hr_p50",
+        "total_precipitation_1hr_p90",
+        "wind_speed_10m_mean",
+        "total_cloud_cover_mean",
+        "mean_sea_level_pressure_mean",
+    ),
+    "extended": (
+        "temperature_2m_mean",
+        "temperature_2m_p10",
+        "temperature_2m_p25",
+        "temperature_2m_p50",
+        "temperature_2m_p75",
+        "temperature_2m_p90",
+        "dewpoint_temperature_2m_mean",
+        "total_precipitation_1hr_mean",
+        "total_precipitation_1hr_p10",
+        "total_precipitation_1hr_p25",
+        "total_precipitation_1hr_p50",
+        "total_precipitation_1hr_p75",
+        "total_precipitation_1hr_p90",
+        "wind_speed_10m_mean",
+        "wind_speed_10m_p90",
+        "u_component_of_wind_10m_mean",
+        "v_component_of_wind_10m_mean",
+        "total_cloud_cover_mean",
+        "mean_sea_level_pressure_mean",
+    ),
+}
+
+
 @dataclass(frozen=True)
 class WeatherNextBQConfig:
     location: str = "US"
     surface_table: Optional[str] = None
     station_table: Optional[str] = None
-    max_bytes_billed: int = 100_000_000
+    max_bytes_billed: int = DEFAULT_BQ_MAX_BYTES_BILLED
+    column_profile: str = "standard"
+    query_timeout_seconds: float = 25.0
+    # Nearest-cell search radius. 0.1 deg cell half-diagonal is ~7.9 km at the
+    # equator, so 9 km always captures at least one cell centre.
+    nearest_radius_km: float = 9.0
+
+    @property
+    def columns(self) -> tuple[str, ...]:
+        return BQ_COLUMN_PROFILES.get(self.column_profile, BQ_COLUMN_PROFILES["standard"])
 
 @dataclass(frozen=True)
 class WeatherNextGCSConfig:
@@ -94,6 +192,23 @@ class GoogleOAuthConfig:
     redirect_uri: Optional[str] = None
 
 @dataclass(frozen=True)
+class WeatherNextRunPolicy:
+    """How the adapter picks a model run and how long results stay fresh.
+
+    WeatherNext 3 initialises hourly, but only the 6-hourly synoptic cycles
+    (00/06/12/18 UTC) carry the 15-day horizon; interim runs stop at 48 h.
+    Runs land on BigQuery a few hours after init, so the newest *usable* run is
+    normally 7-13 h old - the freshness budget must allow for that.
+    """
+    run_hours: tuple[int, ...] = (0, 6, 12, 18)  # UTC init hours the adapter will query
+    delivery_latency_hours: float = 7.0          # expected init -> available-on-BigQuery lag
+    max_run_attempts: int = 3                    # how many older runs to try when the newest is not there yet
+    freshness_hours: float = 24.0                # fresh <= this age; stale <= 2x; expired beyond
+    cache_ttl_seconds: int = 3600                # per (table, run, cell) forecast cache
+    max_horizon_hours: int = 360                 # model horizon for synoptic runs
+
+
+@dataclass(frozen=True)
 class WeatherNextConfig:
     enabled: bool = False
     auth_mode: WeatherNextAuthMode = "adc"
@@ -104,7 +219,29 @@ class WeatherNextConfig:
     gcs: WeatherNextGCSConfig = field(default_factory=WeatherNextGCSConfig)
     ee_project: Optional[str] = None
     google_application_credentials: Optional[str] = None
+    # Presence flag only. The JSON itself is read by weathernext_auth at use time.
+    has_service_account_json: bool = False
     oauth: GoogleOAuthConfig = field(default_factory=GoogleOAuthConfig)
+    run_policy: WeatherNextRunPolicy = field(default_factory=WeatherNextRunPolicy)
+
+    @property
+    def has_oauth_refresh_credentials(self) -> bool:
+        return bool(self.oauth.client_id and self.oauth.client_secret and self.oauth.refresh_token)
+
+    @property
+    def has_credential_file(self) -> bool:
+        return bool(self.google_application_credentials)
+
+    def credential_sources(self) -> list[str]:
+        """Credential sources that are configured, in the order they are tried."""
+        sources: list[str] = []
+        if self.has_service_account_json:
+            sources.append("service_account_json")
+        if self.has_credential_file:
+            sources.append("credentials_file")
+        if self.has_oauth_refresh_credentials:
+            sources.append("oauth_refresh_token")
+        return sources
 
     def validate(self) -> list[str]:
         errors: list[str] = []
@@ -123,34 +260,46 @@ class WeatherNextConfig:
         # BQ validation
         if self.surface == "bigquery":
             if not self.bq.surface_table:
-                errors.append("WEATHERNEXT_BQ_SURFACE_TABLE is required for BigQuery surface")
+                errors.append("WEATHERNEXT_BQ_SURFACE_TABLE (alias WEATHERNEXT_TABLE) is required for BigQuery surface")
+            elif self.bq.surface_table.count(".") != 2:
+                errors.append("WEATHERNEXT_BQ_SURFACE_TABLE must be fully qualified: project.dataset.table")
             if self.bq.max_bytes_billed <= 0:
                 errors.append("WEATHERNEXT_BQ_MAX_BYTES_BILLED must be positive")
+            if self.bq.column_profile not in BQ_COLUMN_PROFILES:
+                errors.append(
+                    f"WEATHERNEXT_BQ_COLUMN_PROFILE must be one of {sorted(BQ_COLUMN_PROFILES)}, got '{self.bq.column_profile}'"
+                )
         # GCS validation
         if self.gcs.ensemble_root and not self.gcs.ensemble_root.startswith("gs://"):
             errors.append("WEATHERNEXT_GCS_ENSEMBLE_ROOT must start with gs://")
         if self.gcs.statistics_root and not self.gcs.statistics_root.startswith("gs://"):
             errors.append("WEATHERNEXT_GCS_STATISTICS_ROOT must start with gs://")
-        # Auth mode specific
-        if self.auth_mode == "adc":
-            # GOOGLE_APPLICATION_CREDENTIALS if set must be a file path, not JSON
-            if self.google_application_credentials:
-                cred = self.google_application_credentials
-                if cred.strip().startswith("{"):
-                    errors.append("GOOGLE_APPLICATION_CREDENTIALS must be a file path, not JSON contents")
-                elif not Path(cred).is_absolute() and not cred.startswith("/run/"):
-                    # allow relative for testing, but warn if looks like placeholder
-                    pass
-        elif self.auth_mode == "oauth":
+        # Credential file must be a path, never JSON contents (use *_JSON for that)
+        if self.google_application_credentials and self.google_application_credentials.strip().startswith("{"):
+            errors.append(
+                "GOOGLE_APPLICATION_CREDENTIALS must be a file path, not JSON contents "
+                "(put JSON contents in GOOGLE_APPLICATION_CREDENTIALS_JSON instead)"
+            )
+        # OAuth mode: refresh-token triple is required *unless* a higher-priority
+        # source (service account JSON / credential file) is configured. The
+        # credential chain always tries service account first.
+        if self.auth_mode == "oauth" and not (self.has_service_account_json or self.has_credential_file):
             if not self.oauth.client_id:
                 errors.append("GOOGLE_OAUTH_CLIENT_ID is required for oauth mode")
             if not self.oauth.client_secret:
                 errors.append("GOOGLE_OAUTH_CLIENT_SECRET is required for oauth mode")
             if not self.oauth.refresh_token:
                 errors.append("GOOGLE_OAUTH_REFRESH_TOKEN is required for oauth mode (client_id+secret alone insufficient)")
-            # Redirect URI should be HTTPS and match authorized URI
-            if self.oauth.redirect_uri and not self.oauth.redirect_uri.startswith("https://"):
-                errors.append("GOOGLE_OAUTH_REDIRECT_URI must be https://")
+        if self.oauth.redirect_uri and not self.oauth.redirect_uri.startswith("https://"):
+            errors.append("GOOGLE_OAUTH_REDIRECT_URI must be https://")
+        # Run policy sanity
+        rp = self.run_policy
+        if not rp.run_hours or any(h < 0 or h > 23 for h in rp.run_hours):
+            errors.append("WEATHERNEXT_RUN_HOURS must be a comma list of UTC hours 0-23")
+        if rp.freshness_hours <= 0:
+            errors.append("WEATHERNEXT_FRESHNESS_HOURS must be positive")
+        if rp.max_run_attempts <= 0:
+            errors.append("WEATHERNEXT_MAX_RUN_ATTEMPTS must be positive")
         return errors
 
 def load_weathernext_config() -> WeatherNextConfig:
@@ -164,9 +313,14 @@ def load_weathernext_config() -> WeatherNextConfig:
     quota_project = _get_env("GOOGLE_CLOUD_QUOTA_PROJECT") or project
 
     bq_location = _get_env("WEATHERNEXT_BQ_LOCATION", "US") or "US"
-    bq_surface_table = _get_env("WEATHERNEXT_BQ_SURFACE_TABLE")
-    bq_station_table = _get_env("WEATHERNEXT_BQ_STATION_TABLE")
-    bq_max_bytes = _int_env("WEATHERNEXT_BQ_MAX_BYTES_BILLED", 100_000_000)
+    # WEATHERNEXT_TABLE / WEATHERNEXT_STATION_TABLE are the short aliases used in
+    # the deployment plan; the *_BQ_* names are the original contract.
+    bq_surface_table = _get_env("WEATHERNEXT_BQ_SURFACE_TABLE") or _get_env("WEATHERNEXT_TABLE")
+    bq_station_table = _get_env("WEATHERNEXT_BQ_STATION_TABLE") or _get_env("WEATHERNEXT_STATION_TABLE")
+    bq_max_bytes = _int_env("WEATHERNEXT_BQ_MAX_BYTES_BILLED", DEFAULT_BQ_MAX_BYTES_BILLED)
+    bq_profile = (_get_env("WEATHERNEXT_BQ_COLUMN_PROFILE", "standard") or "standard").lower()
+    bq_timeout = _float_env("WEATHERNEXT_QUERY_TIMEOUT_SECONDS", 25.0)
+    bq_radius_km = _float_env("WEATHERNEXT_NEAREST_RADIUS_KM", 9.0)
 
     gcs_ensemble = _get_env("WEATHERNEXT_GCS_ENSEMBLE_ROOT", "gs://weathernext3_spatial/weathernext_3_0_0/zarr/") or "gs://weathernext3_spatial/weathernext_3_0_0/zarr/"
     gcs_stats = _get_env("WEATHERNEXT_GCS_STATISTICS_ROOT", "gs://weathernext3_statistics_spatial/weathernext_3_0_0_statistics/zarr/") or "gs://weathernext3_statistics_spatial/weathernext_3_0_0_statistics/zarr/"
@@ -178,11 +332,24 @@ def load_weathernext_config() -> WeatherNextConfig:
     if google_creds_path and _is_placeholder(google_creds_path):
         google_creds_path = None
 
+    # Only record presence; never copy the JSON into the config object.
+    sa_json_raw = _get_env_raw("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+    has_sa_json = bool(sa_json_raw and not _is_placeholder(sa_json_raw) and sa_json_raw.lstrip().startswith("{"))
+
     oauth = GoogleOAuthConfig(
         client_id=_get_env("GOOGLE_OAUTH_CLIENT_ID"),
         client_secret=_get_env("GOOGLE_OAUTH_CLIENT_SECRET"),
         refresh_token=_get_env("GOOGLE_OAUTH_REFRESH_TOKEN"),
         redirect_uri=_get_env("GOOGLE_OAUTH_REDIRECT_URI"),
+    )
+
+    run_policy = WeatherNextRunPolicy(
+        run_hours=_hours_env("WEATHERNEXT_RUN_HOURS", (0, 6, 12, 18)),
+        delivery_latency_hours=_float_env("WEATHERNEXT_DELIVERY_LATENCY_HOURS", 7.0),
+        max_run_attempts=_int_env("WEATHERNEXT_MAX_RUN_ATTEMPTS", 3),
+        freshness_hours=_float_env("WEATHERNEXT_FRESHNESS_HOURS", 24.0),
+        cache_ttl_seconds=_int_env("WEATHERNEXT_CACHE_TTL_SECONDS", 3600),
+        max_horizon_hours=_int_env("WEATHERNEXT_MAX_HORIZON_HOURS", 360),
     )
 
     return WeatherNextConfig(
@@ -196,6 +363,9 @@ def load_weathernext_config() -> WeatherNextConfig:
             surface_table=bq_surface_table,
             station_table=bq_station_table,
             max_bytes_billed=bq_max_bytes,
+            column_profile=bq_profile,
+            query_timeout_seconds=bq_timeout,
+            nearest_radius_km=bq_radius_km,
         ),
         gcs=WeatherNextGCSConfig(
             ensemble_root=gcs_ensemble,
@@ -204,7 +374,9 @@ def load_weathernext_config() -> WeatherNextConfig:
         ),
         ee_project=ee_project,
         google_application_credentials=google_creds_path,
+        has_service_account_json=has_sa_json,
         oauth=oauth,
+        run_policy=run_policy,
     )
 
 # ---------------------------------------------------------------------------

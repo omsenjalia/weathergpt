@@ -25,11 +25,14 @@ from fastapi.concurrency import run_in_threadpool
 
 from services.forecast import get_forecast_service
 from services.forecast_models import ProviderName, SELECTION_POLICY_VERSION
+from services.forecast_aggregation import build_precip_next_24h, build_temperature_spread
 from services.weathernext_catalog import get_catalog
 from services.config import get_config
 from services.forecast_cache import get_cache
 
 router = APIRouter(prefix="/v2/weather", tags=["weather-v2"])
+
+ALLOWED_SOURCES = {"auto", "imd", "weathernext", "accuweather", "open_meteo", "open-meteo", "openmeteo"}
 
 
 def _validate_mode(mode: str) -> str:
@@ -38,22 +41,35 @@ def _validate_mode(mode: str) -> str:
     return mode
 
 
+def _resolve_source(requested_source: str, source: str) -> str:
+    """``requested_source`` (Flutter / chat contract) wins over legacy ``source``."""
+    chosen = (requested_source or source or "auto").strip().lower()
+    if chosen not in ALLOWED_SOURCES:
+        raise HTTPException(status_code=400, detail="requested_source must be auto|imd|weathernext|accuweather|open_meteo")
+    return "open_meteo" if chosen in ("open-meteo", "openmeteo") else chosen
+
+
 @router.get("")
 @router.get("/")
 async def get_weather_v2(
     lat: float = Query(..., ge=-90, le=90),
     lon: float = Query(..., ge=-180, le=180),
     mode: str = Query("everyone", description="everyone|farmer|researcher"),
-    source: str = Query("auto", description="auto|imd|weathernext|accuweather|open_meteo"),
+    requested_source: str = Query("", description="auto|imd|weathernext|accuweather|open_meteo (preferred name)"),
+    source: str = Query("auto", description="Legacy alias for requested_source"),
+    run_id: str = Query("", description="Pin a WeatherNext run, e.g. weathernext_3_0_0_2026091900"),
     forecast_days: int = Query(3, ge=1, le=15),
     language: str = Query("en"),
 ) -> dict[str, Any]:
     """Compact current/forecast overview with provenance.
 
     Uses IMD -> WeatherNext -> AccuWeather -> Open-Meteo selection for auto.
-    Explicit source pins bypass automatic substitution.
+    Explicit source pins bypass automatic substitution and never substitute
+    another provider: a pinned source either returns its data or an explicit
+    ``status: unavailable`` with ``fallback_reasons``.
     """
     mode = _validate_mode(mode)
+    effective_source = _resolve_source(requested_source, source)
 
     def _fetch():
         service = get_forecast_service()
@@ -61,9 +77,10 @@ async def get_weather_v2(
             lat=lat,
             lon=lon,
             product="forecast",
-            requested_source=source,
+            requested_source=effective_source,
             mode=mode,
             forecast_days=forecast_days,
+            run_id=run_id or None,
         )
 
         if not result.forecast:
@@ -72,26 +89,37 @@ async def get_weather_v2(
                 "schema_version": "2.0.0",
                 "status": "unavailable",
                 "mode": mode,
-                "requested_source": source,
+                "requested_source": effective_source,
                 "selected_source": "unavailable",
                 "selection_policy_version": SELECTION_POLICY_VERSION,
                 "error": result.error,
                 "fallback_reasons": result.fallback_reasons,
                 "tried_providers": result.tried_providers,
+                "provenance": {
+                    "requested_source": effective_source,
+                    "selected_source": "unavailable",
+                    "fallback_reasons": result.fallback_reasons,
+                    "tried_providers": result.tried_providers,
+                },
                 "lat": lat,
                 "lon": lon,
                 "fetched_at": datetime.now(timezone.utc).isoformat(),
             }
 
         forecast = result.forecast
+        now = datetime.now(timezone.utc)
         # Build response with required fields
         return {
             "schema_version": forecast.schema_version,
+            "status": "ok",
             "mode": mode,
             "location": forecast.location,
             "current": forecast.current.to_dict() if forecast.current else None,
             "hourly": [p.to_dict() for p in forecast.hourly[:24]],
             "daily": forecast.daily,
+            # Everyone-card summaries (null when the provider cannot support them honestly)
+            "temperature_spread": build_temperature_spread(forecast, now),
+            "precip_next_24h": build_precip_next_24h(forecast, now),
             "provenance": {
                 **forecast.provenance.to_dict(),
                 "requested_source": result.requested_source,
@@ -106,7 +134,7 @@ async def get_weather_v2(
             "providers_used": forecast.provenance.sources,
             "air_quality": forecast.air_quality,
             "alerts": forecast.alerts,
-            "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "fetched_at": now.isoformat(),
         }
 
     return await run_in_threadpool(_fetch)
@@ -162,23 +190,44 @@ async def get_catalog_endpoint(
     }
 
 
+def _parse_iso(value: str) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
 @router.get("/series")
 async def get_series(
     lat: float = Query(..., ge=-90, le=90),
     lon: float = Query(..., ge=-180, le=180),
     variable: str = Query(..., description="Variable ID, e.g., temperature_2m"),
-    run_id: str = Query("", description="Exact run ID, e.g., weathernext_3_0_0_20260919"),
-    statistic: str = Query("mean", description="mean|p10|p25|p50|p75|p90|members"),
+    run_id: str = Query("", description="Exact run ID, e.g., weathernext_3_0_0_2026091900"),
+    statistic: str = Query("mean", description="mean|p10|p25|p50|p75|p90"),
     start_time: str = Query("", description="Valid time start ISO"),
     end_time: str = Query("", description="Valid time end ISO"),
+    forecast_days: int = Query(7, ge=1, le=15),
     mode: str = Query("researcher"),
+    requested_source: str = Query("weathernext", description="Series is a WeatherNext product; other values are rejected"),
 ) -> dict[str, Any]:
-    """Selected variables, point, run, valid-time window, statistic; strict limits."""
+    """Selected variable, point, run, valid-time window, statistic; strict limits.
+
+    Values come from the precomputed ensemble statistics of one run. ``points``
+    keeps the legacy hourly shape; ``values`` carries the requested statistic
+    plus every statistic available for the variable.
+    """
     mode = _validate_mode(mode)
     if mode != "researcher":
-        # Series is primarily researcher, but allow farmer with limited vars
+        # Series is primarily researcher, but allow farmer/everyone with limited vars
         if variable not in ("temperature_2m", "total_precipitation_1hr"):
             raise HTTPException(status_code=403, detail="Variable requires researcher mode")
+    if requested_source and requested_source.lower() != "weathernext":
+        raise HTTPException(status_code=400, detail="series is only served from weathernext")
+    if statistic not in ("mean", "p10", "p25", "p50", "p75", "p90"):
+        raise HTTPException(status_code=400, detail="statistic must be mean|p10|p25|p50|p75|p90")
 
     # Validate variable exists
     catalog = get_catalog()
@@ -195,6 +244,9 @@ async def get_series(
             "variable": variable,
         }
 
+    start_dt = _parse_iso(start_time)
+    end_dt = _parse_iso(end_time)
+
     def _fetch():
         service = get_forecast_service()
         result = service.select_forecast(
@@ -203,6 +255,8 @@ async def get_series(
             product="forecast",
             requested_source="weathernext",
             mode=mode,
+            forecast_days=forecast_days,
+            run_id=run_id or None,
         )
         if not result.forecast:
             return {
@@ -212,34 +266,59 @@ async def get_series(
                 "fallback_reasons": result.fallback_reasons,
             }
 
-        # Filter hourly for time window if provided
-        hourly = result.forecast.hourly
-        if start_time:
-            try:
-                start_dt = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
-                hourly = [p for p in hourly if p.time_utc >= start_dt]
-            except Exception:
-                pass
-        if end_time:
-            try:
-                end_dt = datetime.fromisoformat(end_time.replace("Z", "+00:00"))
-                hourly = [p for p in hourly if p.time_utc <= end_dt]
-            except Exception:
-                pass
+        forecast = result.forecast
+        ensemble = forecast.ensemble or {}
+        series = (ensemble.get("series") or {}).get(variable)
 
-        # Enforce payload ceilings: max 168 points (7 days hourly)
-        if len(hourly) > 168:
-            hourly = hourly[:168]
+        def _in_window(t: datetime) -> bool:
+            if start_dt and t < start_dt:
+                return False
+            if end_dt and t > end_dt:
+                return False
+            return True
+
+        # Legacy hourly shape (bounded to 168 points = 7 days hourly)
+        hourly = [p for p in forecast.hourly if _in_window(p.time_utc)][:168]
+
+        values: list[dict] = []
+        available_statistics: list[str] = []
+        units = {"temperature_2m": "C", "total_precipitation_1hr": "mm"}.get(variable, "unknown")
+        if series:
+            units = series.get("units", units)
+            available_statistics = list(series.get("statistics") or [])
+            for entry in series.get("values") or []:
+                t = _parse_iso(str(entry.get("time_utc")))
+                if t is None or not _in_window(t):
+                    continue
+                values.append({"time_utc": entry.get("time_utc"), "value": entry.get(statistic), **{k: v for k, v in entry.items() if k != "time_utc"}})
+            values = values[:168]
+
+        status = "ok"
+        if series and statistic not in available_statistics:
+            status = "statistic_unavailable"
+        elif not series:
+            status = "variable_not_in_column_profile"
 
         return {
             "schema_version": "2.0.0",
+            "status": status,
             "variable": variable,
             "statistic": statistic,
-            "run_id": result.forecast.provenance.run_id,
-            "init_time_utc": result.forecast.provenance.init_time_utc.isoformat() if result.forecast.provenance.init_time_utc else None,
+            "available_statistics": available_statistics,
+            "units": units,
+            "run_id": forecast.provenance.run_id,
+            "init_time_utc": forecast.provenance.init_time_utc.isoformat() if forecast.provenance.init_time_utc else None,
+            "members": ensemble.get("members"),
+            "values": values,
             "points": [p.to_dict() for p in hourly],
-            "provenance": result.forecast.provenance.to_dict(),
-            "units": {"temperature_2m": "C", "total_precipitation_1hr": "mm"}.get(variable, "unknown"),
+            "provenance": {
+                **forecast.provenance.to_dict(),
+                "requested_source": result.requested_source,
+                "selected_source": result.selected_source.value,
+                "fallback_reasons": result.fallback_reasons,
+                "tried_providers": result.tried_providers,
+            },
+            "column_profile": cfg.bq.column_profile,
         }
 
     return await run_in_threadpool(_fetch)
@@ -481,12 +560,20 @@ async def weather_health() -> dict[str, Any]:
             },
         }
 
+    weathernext_bigquery = None
+    try:
+        from services.weathernext_bigquery import get_bigquery_adapter
+        weathernext_bigquery = get_bigquery_adapter().stats()
+    except Exception as exc:  # pragma: no cover - diagnostics must never fail the endpoint
+        weathernext_bigquery = {"error": type(exc).__name__}
+
     return {
         "status": "ok",
         "selection_policy_version": SELECTION_POLICY_VERSION,
         "provider_priority": get_config().provider_priority,
         "provider_health": provider_health,
         "weathernext_auth": get_credentials_factory_status(),
+        "weathernext_bigquery": weathernext_bigquery,
         "cache": cache.stats(),
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }

@@ -69,17 +69,34 @@ async def fusion_inspector(
 
 
 @router.get("/dev/weathernext")
-async def dev_weathernext_health():
-    """WeatherNext connectivity check - admin diagnostics without credentials."""
+async def dev_weathernext_health(
+    probe: int = Query(0, description="1 = resolve credentials and run a BigQuery dry run (no bytes billed)"),
+):
+    """WeatherNext connectivity check - admin diagnostics without secrets.
+
+    Default is offline (config + credential presence). ``probe=1`` resolves the
+    credential chain (SA JSON -> ADC -> OAuth) and dry-runs the point query so
+    the estimated bytes can be compared with WEATHERNEXT_BQ_MAX_BYTES_BILLED.
+    """
     def _check():
+        cfg = get_config().weathernext
+        bigquery_stats = None
+        try:
+            from services.weathernext_bigquery import get_bigquery_adapter
+            bigquery_stats = get_bigquery_adapter().stats()
+        except Exception as exc:  # pragma: no cover
+            bigquery_stats = {"error": type(exc).__name__}
         return {
             "auth": get_credentials_factory_status(),
-            "connectivity": check_connectivity(),
+            "connectivity": check_connectivity(probe=bool(probe)),
+            "bigquery": bigquery_stats,
             "catalog_coverage": get_catalog().coverage_report(),
             "config": {
-                "enabled": get_config().weathernext.enabled,
-                "auth_mode": get_config().weathernext.auth_mode,
-                "surface": get_config().weathernext.surface,
+                "enabled": cfg.enabled,
+                "auth_mode": cfg.auth_mode,
+                "surface": cfg.surface,
+                "table": cfg.bq.surface_table,
+                "credential_sources": cfg.credential_sources(),
                 "provider_priority": get_config().provider_priority,
             },
         }

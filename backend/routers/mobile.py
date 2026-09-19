@@ -64,6 +64,7 @@ async def get_weather(
     lon: float = Query(..., ge=-180, le=180, description="Longitude (-180 to 180)"),
     language: str = Query("en", description="Preferred language code"),
     source: str = Query("auto", description="auto|imd|weathernext|accuweather|open_meteo (researcher mode)"),
+    requested_source: str = Query("", description="Preferred alias of source (matches /v2/weather and /chat)"),
     mode: str = Query("everyone", description="everyone|farmer|researcher"),
 ) -> dict[str, Any]:
     """Current conditions + today high/low + 3-day outlook for the Flutter home screens.
@@ -71,7 +72,8 @@ async def get_weather(
     Uses shared forecast service with IMD -> WeatherNext -> AccuWeather -> Open-Meteo.
     Explicit source pins bypass automatic substitution for researcher mode.
     """
-    return await run_in_threadpool(_build_weather_snapshot, lat, lon, language, source, mode)
+    effective_source = (requested_source or source or "auto").strip().lower() or "auto"
+    return await run_in_threadpool(_build_weather_snapshot, lat, lon, language, effective_source, mode)
 
 
 def _build_weather_snapshot(lat: float, lon: float, language: str, source: str = "auto", mode: str = "everyone") -> dict[str, Any]:

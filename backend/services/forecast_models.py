@@ -143,6 +143,11 @@ class ForecastProvenance:
     expected_member_count: Optional[int] = None
     valid_member_count: Optional[int] = None
     coverage_completeness: Optional[float] = None  # 0..1
+    # Additive metadata (all optional, safe for existing clients)
+    horizon_hours: Optional[int] = None            # forecast horizon actually present in this payload
+    table: Optional[str] = None                    # BigQuery table / dataset identifier the data came from
+    query_diagnostics: Optional[dict] = None       # bytes billed/processed, cache hit, job id (no secrets)
+    methods: dict = field(default_factory=dict)    # how derived fields were computed (honest labelling)
 
     def to_dict(self) -> dict:
         return {
@@ -170,6 +175,10 @@ class ForecastProvenance:
             "expected_member_count": self.expected_member_count,
             "valid_member_count": self.valid_member_count,
             "coverage_completeness": self.coverage_completeness,
+            "horizon_hours": self.horizon_hours,
+            "table": self.table,
+            "query_diagnostics": self.query_diagnostics,
+            "methods": self.methods,
         }
 
 @dataclass
@@ -334,6 +343,15 @@ def get_weathernest_capability() -> ProviderCapability:
                 product="upper_air",
                 level=level,
             ))
+    # WeatherNext runs reach BigQuery ~7 h after init and only the 6-hourly
+    # synoptic cycles carry the 15-day horizon, so the newest usable run is
+    # routinely 7-13 h old. The budget is therefore config-driven
+    # (WEATHERNEXT_FRESHNESS_HOURS, default 24 h) rather than a fixed 6 h.
+    try:
+        from services.config import get_config
+        freshness_hours = float(get_config().weathernext.run_policy.freshness_hours)
+    except Exception:  # pragma: no cover - config import problems must never break capability lookup
+        freshness_hours = 24.0
     return ProviderCapability(
         provider=ProviderName.WEATHERNEXT,
         products=[ProductType.FORECAST, ProductType.HOURLY, ProductType.DAILY, ProductType.ENSEMBLE, ProductType.PROFILE],
@@ -341,7 +359,7 @@ def get_weathernest_capability() -> ProviderCapability:
         max_forecast_days=15,
         has_ensemble=True,
         ensemble_members=64,
-        freshness_budget_hours=6.0,
+        freshness_budget_hours=freshness_hours,
         requires_credentials=True,
     )
 

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from services.forecast_models import (
@@ -234,10 +234,102 @@ def calculate_joint_probability(
         if satisfies_all:
             satisfying += 1
 
-    prob = (satisfing / valid_count * 100) if valid_count > 0 else 0.0
-    # Fix typo variable
     prob = (satisfying / valid_count * 100) if valid_count > 0 else 0.0
     return prob, satisfying, valid_count
+
+
+# ---------------------------------------------------------------------------
+# Client-facing summaries (Flutter "Everyone" card: spread + next-24h rain)
+# ---------------------------------------------------------------------------
+
+def build_temperature_spread(forecast: Any, now: Optional[datetime] = None, window_hours: int = 24) -> Optional[dict]:
+    """p10-p90 temperature envelope over the next ``window_hours``.
+
+    Only providers that ship ensemble quantiles (WeatherNext) can produce this;
+    returns None otherwise - a one-sided or fabricated spread is never emitted.
+    The envelope is min(p10) .. max(p90) across the window: the range within
+    which each hour's temperature sits with >= 80 % ensemble support.
+    """
+    ensemble = getattr(forecast, "ensemble", None) or {}
+    series = (ensemble.get("series") or {}).get("temperature_2m") or {}
+    values = series.get("values") or []
+    if not values:
+        return None
+    now = now or datetime.now(timezone.utc)
+    end = now + timedelta(hours=window_hours)
+    p10s: list[float] = []
+    p90s: list[float] = []
+    times: list[datetime] = []
+    for entry in values:
+        try:
+            t = datetime.fromisoformat(str(entry.get("time_utc")).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            continue
+        if t < now - timedelta(minutes=30) or t > end:
+            continue
+        lo, hi = entry.get("p10"), entry.get("p90")
+        if lo is None or hi is None or not (is_finite(lo) and is_finite(hi)):
+            continue
+        p10s.append(float(lo))
+        p90s.append(float(hi))
+        times.append(t)
+    if not p10s or not p90s:
+        return None
+    low, high = min(p10s), max(p90s)
+    if high < low:
+        return None
+    prov = getattr(forecast, "provenance", None)
+    return {
+        "p10_c": round(low, 1),
+        "p90_c": round(high, 1),
+        "valid_from": min(times).isoformat(),
+        "valid_to": max(times).isoformat(),
+        "hours": len(times),
+        "members": ensemble.get("members"),
+        "source": prov.selected_source.value if prov else None,
+        "run_id": prov.run_id if prov else None,
+        "method": "min_p10_max_p90_over_window",
+    }
+
+
+def build_precip_next_24h(forecast: Any, now: Optional[datetime] = None, window_hours: int = 24) -> Optional[dict]:
+    """Expected precipitation total over the next ``window_hours`` from hourly points.
+
+    Sums hourly amounts (for WeatherNext these are ensemble *means*, which are
+    linear and therefore valid to sum; quantiles are never summed). Reports
+    coverage so a partial interval is never presented as a full-period total.
+    """
+    hourly = list(getattr(forecast, "hourly", None) or [])
+    if not hourly:
+        return None
+    now = now or datetime.now(timezone.utc)
+    end = now + timedelta(hours=window_hours)
+    total = 0.0
+    times: list[datetime] = []
+    for p in hourly:
+        t = getattr(p, "time_utc", None)
+        if t is None or t < now - timedelta(minutes=30) or t > end:
+            continue
+        amount = getattr(p, "precipitation_mm", None)
+        if amount is None or not is_finite(amount):
+            continue
+        total += max(0.0, float(amount))
+        times.append(t)
+    if not times:
+        return None
+    prov = getattr(forecast, "provenance", None)
+    statistic = "ensemble_mean" if any(getattr(p, "is_ensemble_mean", False) for p in hourly) else "deterministic"
+    return {
+        "total_mm": round(total, 2),
+        "start": min(times).isoformat(),
+        "end": max(times).isoformat(),
+        "hours": len(times),
+        "complete": len(times) >= window_hours,
+        "label": f"next_{window_hours}h",
+        "statistic": statistic,
+        "source": prov.selected_source.value if prov else None,
+        "run_id": prov.run_id if prov else None,
+    }
 
 
 def solar_j_to_w(joules_per_m2: float, interval_hours: int) -> float:
