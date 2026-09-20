@@ -45,18 +45,33 @@ VARIABLE_UNITS: dict[str, tuple[str, Any]] = {
     "station_head_dewpoint_temperature_2m": ("C", kelvin_to_celsius),
     "sea_surface_temperature": ("C", kelvin_to_celsius),
     "total_precipitation_1hr": ("mm", meters_to_mm),
+    "total_precipitation_6hr": ("mm", meters_to_mm),
     "imerg_tp_1hr": ("mm", meters_to_mm),
     "experimental_tp_1hr": ("mm", meters_to_mm),
     "wind_speed_10m": ("km/h", ms_to_kmh),
     "wind_speed_100m": ("km/h", ms_to_kmh),
     "u_component_of_wind_10m": ("km/h", ms_to_kmh),
     "v_component_of_wind_10m": ("km/h", ms_to_kmh),
+    "u_component_of_wind_100m": ("km/h", ms_to_kmh),
+    "v_component_of_wind_100m": ("km/h", ms_to_kmh),
     "mean_sea_level_pressure": ("hPa", pa_to_hpa),
     "total_cloud_cover": ("%", lambda f: f * 100.0),
     "low_cloud_cover": ("%", lambda f: f * 100.0),
     "medium_cloud_cover": ("%", lambda f: f * 100.0),
     "high_cloud_cover": ("%", lambda f: f * 100.0),
     "surface_solar_radiation_downwards_1hr": ("W/m2", lambda j: j / 3600.0),
+}
+
+# WN2 surfaces speak ERA5-style variable names (`2m_temperature`, ...). Map them
+# onto the canonical WN3-style ids so units, series lookups and the /v2 routes
+# see one vocabulary regardless of which model answered.
+WN2_VARIABLE_ALIASES: dict[str, str] = {
+    "2m_temperature": "temperature_2m",
+    "2m_dewpoint_temperature": "dewpoint_temperature_2m",
+    "10m_u_component_of_wind": "u_component_of_wind_10m",
+    "10m_v_component_of_wind": "v_component_of_wind_10m",
+    "100m_u_component_of_wind": "u_component_of_wind_100m",
+    "100m_v_component_of_wind": "v_component_of_wind_100m",
 }
 
 
@@ -141,18 +156,43 @@ def approx_utc_offset_hours(lon: float) -> int:
     return int(round(lon / 15.0))
 
 
-def _step_values(step: dict, variable: str) -> dict[str, Optional[float]]:
-    """Display-unit values for every statistic of ``variable`` present in the step."""
+def _step_values(step: dict, variable: str, keys: Optional[dict[str, str]] = None) -> dict[str, Optional[float]]:
+    """Display-unit values for every statistic of ``variable`` present in the step.
+
+    ``keys`` maps statistic -> raw step key for this variable (WN2 mean-table
+    leaves carry no suffix and ERA5-style names are aliased); without it the
+    WN3 ``{variable}_{stat}`` naming is assumed.
+    """
     units, convert = VARIABLE_UNITS.get(variable, ("native", lambda v: v))
     out: dict[str, Optional[float]] = {}
     for stat in STATISTICS:
-        raw = _finite(step.get(f"{variable}_{stat}"))
+        raw_key = keys.get(stat, f"{variable}_{stat}") if keys else f"{variable}_{stat}"
+        raw = _finite(step.get(raw_key))
         if raw is None:
             continue
         value = convert(raw)
         if variable.endswith("_1hr") and units == "mm" and value < 0:
             value = 0.0  # tiny negative accumulations are numerical noise
         out[stat] = round(value, 3)
+    return out
+
+
+def _column_key_map(columns: tuple[str, ...]) -> "OrderedDict[str, dict[str, str]]":
+    """Canonical variable id -> {statistic: raw step/column key}.
+
+    Handles the three vocabularies the adapters can emit:
+    - WN3 gridded:  ``temperature_2m_mean``            -> temperature_2m / mean
+    - WN3 station:  ``station_head_temperature_2m_p90``-> station_head_temperature_2m / p90
+    - WN2 (ERA5):   ``2m_temperature`` (suffix-less mean table) -> temperature_2m / mean
+    """
+    out: "OrderedDict[str, dict[str, str]]" = OrderedDict()
+    for col in columns:
+        if col == "time":
+            continue
+        split = split_column(col)
+        base, stat = split if split else (col, "mean")
+        canonical = WN2_VARIABLE_ALIASES.get(base, base)
+        out.setdefault(canonical, {})[stat] = col
     return out
 
 
@@ -168,7 +208,15 @@ def normalize_point_forecast(
     now: Optional[datetime] = None,
 ) -> NormalizedForecast:
     now = now or datetime.now(timezone.utc)
-    variables = _variables_in(result.columns)
+    column_map = _column_key_map(result.columns)
+    variables = list(column_map)
+    # WN2 has no wind *speed* leaf; derive it from the mean u/v vector
+    # (magnitude of the mean vector) when only the components are selected,
+    # and label the derivation in provenance.methods.
+    derive_wind_speed = (
+        "wind_speed_10m" not in column_map
+        and {"u_component_of_wind_10m", "v_component_of_wind_10m"} <= set(column_map)
+    )
 
     hourly: list[ForecastPoint] = []
     series: "OrderedDict[str, dict]" = OrderedDict()
@@ -176,7 +224,7 @@ def normalize_point_forecast(
 
     for step in result.steps:
         t: datetime = step["time"]
-        per_var = {v: _step_values(step, v) for v in variables}
+        per_var = {v: _step_values(step, v, column_map[v]) for v in variables}
 
         temp = per_var.get("temperature_2m", {})
         dew = per_var.get("dewpoint_temperature_2m", {})
@@ -195,6 +243,9 @@ def normalize_point_forecast(
         if u.get("mean") is not None and v.get("mean") is not None:
             wind_dir = uv_to_direction(u["mean"], v["mean"])
             wind_dir = round(wind_dir, 1) if wind_dir is not None else None
+        wind_mean = wind.get("mean")
+        if wind_mean is None and derive_wind_speed and u.get("mean") is not None and v.get("mean") is not None:
+            wind_mean = math.hypot(u["mean"], v["mean"])
         code, condition = derive_condition(precipitation_mm, cloud_pct)
         pop = rain_probability_lower_bound({k: precip.get(k) for k in ("p10", "p25", "p50", "p75", "p90")})
 
@@ -208,7 +259,7 @@ def normalize_point_forecast(
             time_utc=t,
             temperature_c=round(temperature_c, 1) if temperature_c is not None else None,
             humidity_percent=humidity,
-            wind_speed_kmh=round(wind["mean"], 1) if wind.get("mean") is not None else None,
+            wind_speed_kmh=round(wind_mean, 1) if wind_mean is not None else None,
             wind_direction_deg=wind_dir,
             pressure_hpa=round(mslp["mean"], 1) if mslp.get("mean") is not None else None,
             pressure_type="msl",
@@ -261,6 +312,7 @@ def normalize_point_forecast(
         "temperature": "ensemble_mean",
         "humidity": "magnus_from_2m_temperature_and_dewpoint_means" if "dewpoint_temperature_2m" in variables else "unavailable_dewpoint_not_selected",
         "wind_direction": "direction_of_mean_uv_vector" if {"u_component_of_wind_10m", "v_component_of_wind_10m"} <= set(variables) else "unavailable_uv_not_selected",
+        "wind_speed": "magnitude_of_mean_uv_vector" if derive_wind_speed else "ensemble_mean",
         "pressure": "mean_sea_level_pressure_ensemble_mean",
         "condition": "wmo_class_from_mean_precip_rate_and_cloud_cover",
         "precipitation": "ensemble_mean_1h_accumulation_summed_over_intervals",
@@ -335,12 +387,7 @@ def normalize_point_forecast(
 
 
 def _variables_in(columns: tuple[str, ...]) -> list[str]:
-    seen: list[str] = []
-    for col in columns:
-        split = split_column(col)
-        if split and split[0] not in seen:
-            seen.append(split[0])
-    return seen
+    return list(_column_key_map(columns))
 
 
 def _nearest_point(hourly: list[ForecastPoint], now: datetime) -> ForecastPoint:

@@ -48,15 +48,23 @@ INTERIM_RUN_HORIZON_HOURS = 48
 # Public aliases from the deployment plan.  Runtime configuration is resolved
 # through ``get_config().weathernext.bq.table_for`` so tests and serverless
 # instances can change env vars without re-importing this module.
+# NOTE: the WN2 Analytics Hub tables are ``weathernext_2_0_0`` (forecasts) and
+# ``weathernext_2_0_0_mean`` (mean forecasts) - there is no WN2 0.1 deg table,
+# and WN2 leaves use ERA5-style names (``2m_temperature``), not the WN3
+# ``temperature_2m_*`` vocabulary.
 TABLES = {
     "wn3_0p1": os.getenv("WEATHERNEXT_TABLE_3") or os.getenv("WEATHERNEXT_TABLE") or "cool-archery-296710.weathernext.weathernext_3_0_0_0p1deg",
     "wn3_0p05": os.getenv("WEATHERNEXT_TABLE_3_HR") or "cool-archery-296710.weathernext.weathernext_3_0_0_0p05deg",
-    "wn2_0p1": os.getenv("WEATHERNEXT_TABLE_2") or "cool-archery-296710.weathernext.weathernext_2_0_0_0p1deg",
-    "wn2_mean": os.getenv("WEATHERNEXT_TABLE_2") or "cool-archery-296710.weathernext.weathernext_2_0_0_0p1deg",
+    "wn2": os.getenv("WEATHERNEXT_TABLE_2") or "cool-archery-296710.weathernext.weathernext_2_0_0",
+    "wn2_mean": os.getenv("WEATHERNEXT_TABLE_2_MEAN") or "cool-archery-296710.weathernext.weathernext_2_0_0_mean",
 }
 
 _TABLE_RE = re.compile(r"^[A-Za-z0-9_\-]+\.[A-Za-z0-9_]+\.[A-Za-z0-9_]+$")
-_COLUMN_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+# Leaf identifiers are lowercase alphanumerics/underscores. A leading digit is
+# allowed because WN2 uses ERA5-style names (`2m_temperature`); those leaves are
+# backticked in the generated SQL. Anything else (spaces, quotes, semicolons)
+# is rejected before it can reach BigQuery.
+_COLUMN_RE = re.compile(r"^[a-z0-9][a-z0-9_]*$")
 _RUN_ID_RE = re.compile(r"(\d{4})(\d{2})(\d{2})(\d{2})$")
 
 
@@ -165,6 +173,7 @@ def candidate_init_times(
     horizon_hours: int,
     max_horizon: int,
     run_id: Optional[str] = None,
+    freshness_hours: Optional[float] = None,
 ) -> list[datetime]:
     """Newest-first list of init times worth querying for ``horizon_hours``."""
     if run_id:
@@ -175,7 +184,14 @@ def candidate_init_times(
 
     latest_allowed = (now - timedelta(hours=delivery_latency_hours)).astimezone(timezone.utc)
     t = latest_allowed.replace(minute=0, second=0, microsecond=0)
-    floor = now - timedelta(hours=72)  # never look further back than 3 days
+    # Never look further back than 3 days, and never past the *expiry* horizon
+    # (2x the freshness budget): a run older than that is expired and cannot be
+    # served even with allow_stale, so querying its partition only burns a
+    # BigQuery job that the freshness gate is guaranteed to reject.
+    lookback_hours = 72.0
+    if freshness_hours and freshness_hours > 0:
+        lookback_hours = min(lookback_hours, 2.0 * float(freshness_hours))
+    floor = now - timedelta(hours=lookback_hours)
     out: list[datetime] = []
     while len(out) < max_attempts and t >= floor:
         if t.hour in policy_run_hours and run_horizon_hours(t, max_horizon) >= min(horizon_hours, max_horizon):
@@ -207,7 +223,14 @@ def build_point_query(
 
     init_utc = init_time.astimezone(timezone.utc)
     max_time = init_utc + timedelta(hours=int(horizon_hours))
-    leaf_select = ",\n            ".join(f"f.{c}" for c in columns)
+
+    def _leaf(col: str) -> str:
+        # WN2's ERA5-style names start with a digit (`2m_temperature`) and must
+        # be backticked in BigQuery SQL; WN3 names are emitted bare so query
+        # plans (and tests asserting `f.temperature_2m_mean`) stay readable.
+        return f"f.`{col}`" if col[0].isdigit() else f"f.{col}"
+
+    leaf_select = ",\n            ".join(_leaf(c) for c in columns)
     sql = f"""
         SELECT
           ST_Y(t.geography) AS cell_lat,
@@ -342,6 +365,16 @@ class WeatherNextBigQueryAdapter:
             self._client = None
             self._client_source = None
 
+    def now(self) -> datetime:
+        """Current time on the adapter's (injectable) clock.
+
+        Callers that classify freshness for a result this adapter produced must
+        use the same clock that selected the run - otherwise run selection and
+        freshness judgement disagree whenever the clock is injected (tests) and
+        drift by the query duration in production.
+        """
+        return self._clock()
+
     def get_client(self):
         """Build (once) a BigQuery client from the credential chain."""
         with self._lock:
@@ -461,15 +494,23 @@ class WeatherNextBigQueryAdapter:
             horizon,
             policy.max_horizon_hours,
             run_id=run_id,
+            freshness_hours=policy.freshness_hours,
         )
         if not candidates:
             raise WeatherNextQueryError("no_candidate_run", "Run policy produced no candidate init times")
 
         attempted: list[str] = []
         last_diag: Optional[QueryDiagnostics] = None
+        # Column vocabulary must match the *queried table's* schema: WN2 speaks
+        # ERA5-style names, and the WN3 0.05 deg station table only carries
+        # ``station_head_*`` leaves. Using the WN3 gridded profile for either
+        # produces BigQuery "Unrecognized name" errors (schema_mismatch).
+        default_columns = cfg.bq.columns_for(
+            model, station=high_resolution or "0p05" in table_id
+        )
         for init_time in candidates:
             allowed_horizon = min(horizon, run_horizon_hours(init_time, policy.max_horizon_hours))
-            selected_columns = columns or cfg.bq.columns
+            selected_columns = columns or default_columns
             sql, params = build_point_query(
                 table_id, selected_columns, lat, lon, init_time, allowed_horizon, cfg.bq.nearest_radius_km
             )
@@ -524,7 +565,11 @@ class WeatherNextBigQueryAdapter:
 
     def query_wn2_mean_point(self, lat: float, lon: float, init_time: Optional[datetime] = None, **kwargs) -> PointForecastResult:
         run_id = run_id_for(init_time, "weathernext_2_0_0") if init_time else kwargs.pop("run_id", None)
-        mean_columns = tuple(c for c in self.cfg.bq.columns if c.endswith("_mean"))
+        # The WN2 mean table already carries ensemble means and its leaves have
+        # no statistic suffix, so the WN2 profile *is* the mean projection.
+        # Filtering the WN3 profile for "_mean" queried WN3 names against a WN2
+        # table - a guaranteed "Unrecognized name" (schema_mismatch) failure.
+        mean_columns = self.cfg.bq.columns_for("weathernext_2")
         return self.fetch_point_forecast(lat, lon, model="weathernext_2", run_id=run_id, columns=mean_columns, **kwargs)
 
     def estimate_point_query(self, lat: float, lon: float, *, horizon_hours: int = 72, table: Optional[str] = None) -> dict:

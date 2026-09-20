@@ -25,6 +25,7 @@ from services.forecast_models import (
     ProviderName,
     SELECTION_POLICY_VERSION,
     ForecastProvenance,
+    FreshnessStatus,
     ProductType,
 )
 from services.providers.base import ProviderResult
@@ -179,9 +180,18 @@ class ForecastService:
             if result.success and result.forecast:
                 if result.fallback_reason:
                     fallback_reasons.append(result.fallback_reason)
-                # Check freshness
+                # Check freshness. Prefer the status the provider stamped on the
+                # forecast: WeatherNext classifies it on the same (injectable)
+                # clock that selected the run, so run selection and the gate
+                # can never disagree. Wall-clock recompute stays as the
+                # fallback for providers that do not stamp one.
                 init_time = result.forecast.provenance.init_time_utc
-                freshness = provider.get_freshness_status(init_time)
+                stored = result.forecast.provenance.freshness_status
+                freshness = (
+                    stored
+                    if stored and stored != FreshnessStatus.UNKNOWN
+                    else provider.get_freshness_status(init_time)
+                )
 
                 if freshness.value == "fresh":
                     fresh_candidates.append((result, provider_name))

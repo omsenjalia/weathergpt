@@ -161,6 +161,34 @@ BQ_COLUMN_PROFILES: dict[str, tuple[str, ...]] = {
     ),
 }
 
+# WeatherNext 2 BigQuery surfaces (``weathernext_2_0_0`` / ``weathernext_2_0_0_mean``)
+# use ERA5-style variable names - ``2m_temperature``, ``10m_u_component_of_wind`` -
+# and the mean table carries the ensemble mean with *no* statistic suffix.
+# Querying them with the WN3 ``temperature_2m_*`` vocabulary fails with
+# "Unrecognized name" (schema_mismatch), so WN2 gets its own leaf list.
+# Names with a leading digit are backticked by the query builder.
+BQ_COLUMN_PROFILES_WN2: tuple[str, ...] = (
+    "2m_temperature",
+    "2m_dewpoint_temperature",
+    "total_precipitation_1hr",
+    "10m_u_component_of_wind",
+    "10m_v_component_of_wind",
+    "total_cloud_cover",
+    "mean_sea_level_pressure",
+)
+
+# The WN3 0.05 deg table is a narrow station-head schema: only 2 m temperature
+# and dew point exist there, each with the six precomputed statistics. Selecting
+# the gridded 0.1 deg leaves against it is a guaranteed schema_mismatch.
+BQ_STATION_COLUMNS: tuple[str, ...] = (
+    "station_head_temperature_2m_mean",
+    "station_head_temperature_2m_p10",
+    "station_head_temperature_2m_p90",
+    "station_head_dewpoint_temperature_2m_mean",
+    "station_head_dewpoint_temperature_2m_p10",
+    "station_head_dewpoint_temperature_2m_p90",
+)
+
 
 @dataclass(frozen=True)
 class WeatherNextBQConfig:
@@ -183,6 +211,26 @@ class WeatherNextBQConfig:
     @property
     def columns(self) -> tuple[str, ...]:
         return BQ_COLUMN_PROFILES.get(self.column_profile, BQ_COLUMN_PROFILES["standard"])
+
+    @property
+    def station_columns(self) -> tuple[str, ...]:
+        """Leaf columns that actually exist on the 0.05 deg station-head table."""
+        return BQ_STATION_COLUMNS
+
+    def columns_for(self, model: str = "weathernext_3", *, station: bool = False) -> tuple[str, ...]:
+        """Leaf columns matching the *schema of the model/table* being queried.
+
+        WN2 tables speak ERA5-style names (``2m_temperature``) with no statistic
+        suffix on the mean table; the WN3 0.05 deg station table only carries
+        ``station_head_*`` leaves. Using the WN3 gridded profile for either is a
+        guaranteed BigQuery "Unrecognized name" (schema_mismatch) failure.
+        """
+        normalized = (model or "weathernext_3").lower().replace("-", "_")
+        if normalized in {"weathernext_2", "weathernext_2_0_0", "wn2", "2", "2.0.0"}:
+            return BQ_COLUMN_PROFILES_WN2
+        if station:
+            return self.station_columns
+        return self.columns
 
     def table_for(self, model: str = "weathernext_3", *, high_resolution: bool = False) -> Optional[str]:
         """Return the configured table for a public model alias.

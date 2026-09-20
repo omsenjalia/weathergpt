@@ -156,7 +156,7 @@ def create_app() -> FastAPI:
                 "tables": {
                     "wn3_0p1": cfg.weathernext.bq.table_3 or cfg.weathernext.bq.surface_table,
                     "wn3_0p05": cfg.weathernext.bq.table_3_high_resolution,
-                    "wn2_0p1": cfg.weathernext.bq.table_2,
+                    "wn2": cfg.weathernext.bq.table_2,
                 },
             },
             "jev": {

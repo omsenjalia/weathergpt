@@ -84,6 +84,16 @@ _ERROR_CODE_BY_REASON = {
 }
 
 
+def _mock_data_enabled() -> bool:
+    """WEATHERNEXT_MOCK_DATA=1 -> synthetic offline data, clearly labelled.
+
+    Dev/test only. When set, the provider must be eligible *without* Google
+    credentials - running credential-free is the entire point of the mode -
+    and every response is stamped ``weathernext_3_0_0_mock``.
+    """
+    return os.getenv("WEATHERNEXT_MOCK_DATA", "0") == "1"
+
+
 class WeatherNextProvider(BaseForecastProvider):
     @property
     def name(self) -> ProviderName:
@@ -109,12 +119,13 @@ class WeatherNextProvider(BaseForecastProvider):
         if not (-90 <= lat <= 90 and -180 <= lon <= 180):
             return False, "invalid_coordinates"
 
-        # Check credentials
-        cred_status = validate_credentials(cfg)
-        if cred_status.status == AuthStatus.DISABLED:
-            return False, "weathernext_disabled"
-        if cred_status.status in (AuthStatus.MISSING_CREDENTIALS, AuthStatus.INVALID_CONFIG):
-            return False, f"credentials_{cred_status.status.value}"
+        # Check credentials (mock mode is designed to run without them)
+        if not _mock_data_enabled():
+            cred_status = validate_credentials(cfg)
+            if cred_status.status == AuthStatus.DISABLED:
+                return False, "weathernext_disabled"
+            if cred_status.status in (AuthStatus.MISSING_CREDENTIALS, AuthStatus.INVALID_CONFIG):
+                return False, f"credentials_{cred_status.status.value}"
 
         # Product eligibility: WeatherNext is forecast, not observations
         # Current conditions as observations are not WeatherNext's product
@@ -131,6 +142,14 @@ class WeatherNextProvider(BaseForecastProvider):
     def fetch(self, lat: float, lon: float, product: str = "forecast", **kwargs) -> ProviderResult:
         start = time.perf_counter()
         cfg = get_config().weathernext
+
+        # Offline synthetic data for tests / demos - clearly labelled, never
+        # live. This must short-circuit *before* the credential/eligibility
+        # checks: the documented WEATHERNEXT_MOCK_DATA=1 offline mode is
+        # specifically for running without Google credentials, so gating it
+        # behind validate_credentials() made it unreachable.
+        if _mock_data_enabled() and cfg.enabled:
+            return self._mock_forecast(lat, lon, product, start, **kwargs)
 
         eligible, reason = self.is_eligible(product, lat, lon)
         if not eligible:
@@ -155,7 +174,16 @@ class WeatherNextProvider(BaseForecastProvider):
                 from services.forecast_cache import get_cache
                 cached = get_cache().get(cache_key)
                 if cached:
-                    freshness = self.get_freshness_status(cached.provenance.init_time_utc)
+                    # Prefer the classification stamped at fetch time (it may
+                    # come from the adapter's injectable clock); recompute on
+                    # the wall clock only when absent. The 1 h cache TTL bounds
+                    # any drift between the two.
+                    stored = cached.provenance.freshness_status
+                    freshness = (
+                        stored
+                        if stored and stored != FreshnessStatus.UNKNOWN
+                        else self.get_freshness_status(cached.provenance.init_time_utc)
+                    )
                     if freshness == FreshnessStatus.FRESH:
                         self.record_success()
                         return ProviderResult(
@@ -177,8 +205,9 @@ class WeatherNextProvider(BaseForecastProvider):
 
         # WeatherNext itself has a surface fallback chain.  This is separate
         # from ForecastService's provider fallback: preferred WN3 BigQuery is
-        # followed by WN3 statistics Zarr, then WN2 BigQuery and WN2 statistics
-        # Zarr before AccuWeather/Open-Meteo are considered.
+        # followed by WN3 statistics Zarr before AccuWeather/Open-Meteo are
+        # considered.  WN2 is only queried when explicitly pinned (model=
+        # weathernext_2) - it is a different schema, not a drop-in fallback.
         try:
             return self._fetch_surface_chain(lat, lon, product, start, **kwargs)
         except Exception as exc:
@@ -202,8 +231,12 @@ class WeatherNextProvider(BaseForecastProvider):
     def _fetch_surface_chain(self, lat: float, lon: float, product: str, start_time: float, **kwargs) -> ProviderResult:
         requested_model = (kwargs.get("model") or "weathernext_3").lower().replace("-", "_")
         if requested_model in {"weathernext_3", "wn3", "3", "3.0.0", "weathernext_3_0_0"}:
-            chain = [("weathernext_3", "bigquery"), ("weathernext_3", "gcs_statistics"),
-                     ("weathernext_2", "bigquery"), ("weathernext_2", "gcs_statistics")]
+            # No silent cross-model substitution: WN2 tables speak a different
+            # schema (ERA5-style leaf names, different table ids), so falling
+            # back from WN3 to WN2 used to emit schema_mismatch on every
+            # request whenever the newest WN3 partition was not delivered yet.
+            # WN2 remains available via an explicit model=weathernext_2 pin.
+            chain = [("weathernext_3", "bigquery"), ("weathernext_3", "gcs_statistics")]
         elif requested_model in {"weathernext_2", "wn2", "2", "2.0.0", "weathernext_2_0_0"}:
             chain = [("weathernext_2", "bigquery"), ("weathernext_2", "gcs_statistics")]
         else:
@@ -331,10 +364,6 @@ class WeatherNextProvider(BaseForecastProvider):
         except ValueError:
             table = None
 
-        # Offline synthetic data for tests / demos - clearly labelled, never live.
-        if os.getenv("WEATHERNEXT_MOCK_DATA", "0") == "1":
-            return self._mock_forecast(lat, lon, product, start_time, **kwargs)
-
         try:
             from services.weathernext_bigquery import WeatherNextQueryError, get_bigquery_adapter
             from services.weathernext_normalize import normalize_point_forecast
@@ -377,6 +406,11 @@ class WeatherNextProvider(BaseForecastProvider):
                 mode=mode,
                 forecast_days=int(forecast_days),
                 freshness_hours=cfg.run_policy.freshness_hours,
+                # Classify freshness on the same clock that selected the run.
+                # Splitting the time source (adapter clock for run selection,
+                # wall clock for freshness) made results randomly "stale" and
+                # broke the injectable-clock contract the tests rely on.
+                now=adapter.now(),
             )
         except Exception as exc:
             return self._failure(f"normalization_failed_{type(exc).__name__}", str(exc), start_time, table=table, transient=True)
