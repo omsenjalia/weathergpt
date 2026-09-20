@@ -406,9 +406,16 @@ class WeatherNextBigQueryAdapter:
         from google.cloud import bigquery  # type: ignore
 
         cfg = self.cfg
+        # A dry run is the cost-inspection path.  BigQuery applies
+        # ``maximum_bytes_billed`` to dry runs too, so putting the production
+        # cap on the estimate query makes the diagnostic fail with the same
+        # "N or higher required" error it is supposed to explain.  Dry runs do
+        # not bill bytes; leave the cap unset and compare the returned estimate
+        # with the configured cap in ``estimate_point_query`` instead.
+        maximum_bytes_billed = None if dry_run else int(cfg.bq.max_bytes_billed)
         job_config = bigquery.QueryJobConfig(
             query_parameters=[bigquery.ScalarQueryParameter(name, kind, value) for name, kind, value in params],
-            maximum_bytes_billed=int(cfg.bq.max_bytes_billed),
+            maximum_bytes_billed=maximum_bytes_billed,
             use_query_cache=True,
             use_legacy_sql=False,
             dry_run=dry_run,
@@ -585,6 +592,8 @@ class WeatherNextBigQueryAdapter:
         sql, params = build_point_query(table_id, cfg.bq.columns, lat, lon, init_time, horizon_hours, cfg.bq.nearest_radius_km)
         _, diag = self.run_query(sql, params, dry_run=True)
         estimate = diag.total_bytes_processed or 0
+        maximum_bytes_billed = int(cfg.bq.max_bytes_billed)
+        within_cap = estimate <= maximum_bytes_billed
         return {
             "status": "ok",
             "table": table_id,
@@ -592,9 +601,10 @@ class WeatherNextBigQueryAdapter:
             "columns": list(cfg.bq.columns),
             "estimated_bytes_upper_bound": estimate,
             "estimated_gib_upper_bound": round(estimate / 1024 ** 3, 3),
-            "maximum_bytes_billed": int(cfg.bq.max_bytes_billed),
-            "within_cap": estimate <= int(cfg.bq.max_bytes_billed),
-            "note": "Dry-run estimates ignore geography cluster pruning; bytes actually billed are usually far lower.",
+            "maximum_bytes_billed": maximum_bytes_billed,
+            "within_cap": within_cap,
+            "budget_status": "within_cap" if within_cap else "estimate_exceeds_cap",
+            "note": "Dry-run estimates ignore geography cluster pruning; bytes actually billed are usually far lower. The dry run is uncapped and does not bill bytes.",
         }
 
     def stats(self) -> dict:

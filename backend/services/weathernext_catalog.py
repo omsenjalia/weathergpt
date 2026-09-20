@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional
 
+from services.config import DEFAULT_BQ_MAX_BYTES_BILLED
 from services.forecast_models import PRESSURE_LEVELS, WEATHERNEXT_VARIABLES
 
 
@@ -156,8 +157,19 @@ def build_default_catalog() -> list[CapabilityRecord]:
                 access_status=CapabilityState.PLANNED,
                 license="CC BY 4.0 for historical (valid time >1h past), real-time terms otherwise",
                 distribution_rules="Historical CC BY 4.0, real-time controlled",
-                cost_bounds={"max_bytes_billed": 100_000_000},
-                quota_bounds={"max_bytes_per_query": 100_000_000},
+                # BigQuery checks maximum_bytes_billed against the
+                # pre-pruning estimate for nested forecast leaves.  A 100 MB
+                # value (the old catalog entry) rejects this bounded point
+                # query before it can run; the runtime default is 100 GiB.
+                # This is a cap, not a promise that every query spends that
+                # amount: geography clustering normally makes actual billing
+                # much smaller.
+                cost_bounds={
+                    "default_max_bytes_billed": DEFAULT_BQ_MAX_BYTES_BILLED,
+                    "default_max_gib": round(DEFAULT_BQ_MAX_BYTES_BILLED / 1024 ** 3, 3),
+                    "estimate_is_pre_pruning": True,
+                },
+                quota_bounds={"recommended_max_bytes_per_query": DEFAULT_BQ_MAX_BYTES_BILLED},
                 provider_adapter="weathernext",
                 backend_route="/v2/weather/series",
                 ui_entry_point="researcher_table_explorer",

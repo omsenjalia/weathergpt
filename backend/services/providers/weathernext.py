@@ -387,10 +387,28 @@ class WeatherNextProvider(BaseForecastProvider):
                 extra={"credential_attempts": exc.attempts},
             )
         except WeatherNextQueryError as exc:
+            extra = {
+                k: v for k, v in exc.details.items()
+                if k in ("required_bytes", "attempted_runs", "attempts")
+            }
+            # Keep the byte-limit failure actionable without exposing the full
+            # BigQuery request.  This is a hard pre-execution estimate failure,
+            # not a transient error: retrying the same query or stepping through
+            # older runs cannot make the selected leaf columns cheaper.
+            if exc.code == "bytes_billed_limit_exceeded":
+                configured_cap = int(cfg.bq.max_bytes_billed)
+                required = extra.get("required_bytes")
+                extra.update({
+                    "configured_max_bytes_billed": configured_cap,
+                    "configured_max_gib": round(configured_cap / 1024 ** 3, 3),
+                    "required_gib": round(required / 1024 ** 3, 3) if required else None,
+                    "retryable": False,
+                    "remediation": "Run the uncapped dry-run probe, then raise WEATHERNEXT_BQ_MAX_BYTES_BILLED or choose the minimal column profile.",
+                })
             return self._failure(
                 exc.code, str(exc), start_time, table=table,
                 transient=exc.code not in _NON_TRANSIENT_CODES,
-                extra={k: v for k, v in exc.details.items() if k in ("required_bytes", "attempted_runs", "attempts")},
+                extra=extra,
             )
         except ImportError as exc:
             return self._failure("missing_dependency_bigquery", str(exc), start_time, table=table, transient=False)
