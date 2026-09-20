@@ -187,6 +187,11 @@ sih/
 | ------------------- | -------- | --------------------- | ---------------------------------------------------- |
 | `GROQ_API_KEY`      | **Yes**  | —                     | API key from [console.groq.com](https://console.groq.com) |
 | `GROQ_MODEL`        | No       | `qwen/qwen3.8-27b`   | Groq model ID. Must be accessible by your key.       |
+| `ACCUWEATHER_KEY`   | No       | —                    | New-portal key (post 2025-09-09). Sent as `Authorization: Bearer`. |
+| `ACCUWEATHER_AUTH_MODE` | No   | `bearer`             | `bearer` (new portal) \| `query` (legacy `?apikey=`) \| `auto` (try both). |
+| `ACCUWEATHER_MAX_FORECAST_DAYS` | No | `5`              | Daily horizon the plan sells: 5 (Starter/Standard), 10 (Prime), 15 (Elite). |
+| `ACCUWEATHER_LOCATION_KEY_TTL_HOURS` | No | `720`     | Location-key cache TTL (saves 1 paid call per forecast). `0` disables. |
+| `ACCUWEATHER_CREDENTIAL_COOLDOWN_SECONDS` | No | `900` | Latch a rejected key out for this long. `0` = always retry. |
 
 ### Frontend (`frontend/.env`)
 
@@ -292,6 +297,38 @@ npm run dev              # Starts on http://localhost:5173
 7. **Stale `-l` file**: There's an untracked `-l` file in the repo root — this is a shell artifact and should be deleted/gitignored.
 
 8. **Voice requires HTTPS**: Web Speech API requires `https://` or `localhost`. Won't work on plain HTTP deployments.
+
+9. **AccuWeather portal migration (9 Sep 2025)**: AccuWeather replaced its developer portal and
+   **retired every legacy API key** while ending the free tier. Auth is now
+   `Authorization: Bearer <key>` over HTTPS — the historical `?apikey=` query parameter returns
+   `401 {"Code":"Unauthorized","Message":"API authorization failed"}`. Paid plans also cap the
+   daily horizon (Starter $2/mo and Standard $25/mo = **5-day** daily forecasts, 10-day needs
+   Prime, 15-day Elite), and asking for more returns `403`. The 14-day trial gives 500 calls/day,
+   after which there is no free access at all.
+
+   Both AccuWeather paths were updated for this and must stay in sync:
+   - `backend/services/providers/accuweather.py` — forecast provider in the
+     IMD → WeatherNext → AccuWeather → Open-Meteo chain. Sends the bearer header
+     (`ACCUWEATHER_AUTH_MODE=bearer|query|auto`), clamps the horizon to
+     `ACCUWEATHER_MAX_FORECAST_DAYS` (default 5), retries the 5-day endpoint on a 403, caches
+     resolved location keys (`ACCUWEATHER_LOCATION_KEY_TTL_HOURS`, default 720 h) because every
+     forecast otherwise costs 2–3 paid calls, and latches a rejected key out for
+     `ACCUWEATHER_CREDENTIAL_COOLDOWN_SECONDS` (default 900 s).
+   - `backend/services/fusion.py` — legacy current-conditions fusion (`_accuweather_get`).
+     Provider failures are collected into the response's `provider_errors` map instead of only
+     being printed, so `GET /fusion` explains a dead key.
+   - `frontend/src/utils/ensembleEngine.js` — browser-side ensemble. Uses the bearer header and
+     reports failures through `providerErrors`, rendered by the `/dev` Data Pipeline tab. Prefer
+     leaving `VITE_ACCUWEATHER_KEY` empty: the key ships in the public bundle and the browser call
+     can be CORS-blocked.
+
+   Never mask an AccuWeather auth failure as a generic "geocode failed" — the whole point of the
+   error mapping is that an expired key reads as an expired key in `GET /v2/weather/health`,
+   `GET /dev` and the `fallback_reasons` of a weather response.
+
+   **Branding**: AccuWeather's terms require its logo, linked to https://www.accuweather.com/, on every
+   screen where AccuWeather data appears. If the provider is re-enabled in a user-facing surface, add
+   the attribution there too.
 
 ---
 

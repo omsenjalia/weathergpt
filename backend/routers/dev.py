@@ -235,6 +235,28 @@ async def dev_intent(
     }
 
 
+def _accuweather_status() -> dict:
+    """Why AccuWeather is (not) serving right now — auth mode, plan horizon, latch state.
+
+    AccuWeather relaunched its developer portal on 2025-09-09: every legacy key
+    was retired, auth moved to `Authorization: Bearer`, the free tier became a
+    14-day trial, and paid plans cap the daily horizon (Starter/Standard = 5
+    days). A key that is present but rejected is the single most common cause of
+    "AccuWeather stopped working", so its live state is surfaced here instead of
+    only appearing as a fallback_reason deep inside a weather response.
+    """
+    try:
+        from services.forecast_models import ProviderName
+
+        provider = get_forecast_service().providers.get(ProviderName.ACCUWEATHER)
+        diagnostics = getattr(provider, "diagnostics", None)
+        if callable(diagnostics):
+            return diagnostics()
+    except Exception as exc:  # pragma: no cover - diagnostics must never fail /dev
+        return {"error": type(exc).__name__}
+    return {"configured": False}
+
+
 @router.get("/dev")
 @router.get("/dev/", include_in_schema=False)
 async def dev_diagnostics(http_request: Request):
@@ -296,6 +318,7 @@ async def dev_diagnostics(http_request: Request):
             "imd_jwt_token": _has("IMD_JWT_TOKEN"),
             "typesafe_api_key": _has("TYPESAFE_API_KEY"),
         },
+        "accuweather": _accuweather_status(),
         "weathernext": {
             "enabled": cfg.weathernext.enabled,
             "auth_mode": cfg.weathernext.auth_mode,

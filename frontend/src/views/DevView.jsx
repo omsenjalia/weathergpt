@@ -497,11 +497,18 @@ export default function DevView({ location, language }) {
                   { name: 'OpenWeatherMap', key: 'openweather', weight: '1.1', active: !!ensembleData?.providersUsed?.some((p) => p.name.includes('OpenWeather')) },
                 ].map((p, i) => {
                   const providerObj = ensembleData?.providersUsed?.find((used) => used.name.toLowerCase().includes(p.key.toLowerCase())) || (p.key === 'openmeteo' ? ensembleData?.providersUsed?.[0] : null)
+                  // A configured vendor that hard-failed (expired AccuWeather key, missing
+                  // subscription, CORS block) reports why instead of claiming "no key".
+                  const providerError = ensembleData?.providerErrors?.[p.name]
                   return (
                     <div
                       key={i}
                       className={`glass rounded-2xl p-4 border flex flex-col justify-between transition-all ${
-                        p.active ? 'border-emerald-500/50 bg-emerald-500/10' : 'border-white/10 bg-white/5 opacity-60'
+                        p.active
+                          ? 'border-emerald-500/50 bg-emerald-500/10'
+                          : providerError
+                            ? 'border-rose-500/50 bg-rose-500/10'
+                            : 'border-white/10 bg-white/5 opacity-60'
                       }`}
                     >
                       <div>
@@ -515,13 +522,17 @@ export default function DevView({ location, language }) {
                             <span>Temp: {providerObj.temp}°C</span>
                             <span>Feels: {providerObj.feelsLike}°C</span>
                           </div>
+                        ) : providerError ? (
+                          <span className="text-[11px] text-rose-300 leading-snug" title={providerError}>
+                            {providerError}
+                          </span>
                         ) : (
                           <span className="text-[11px] text-white/40 italic">Key Not Configured</span>
                         )}
                       </div>
 
                       <button
-                        onClick={() => setSelectedRawProvider(providerObj || { name: p.name, raw: { note: 'No key provided for this provider in .env' } })}
+                        onClick={() => setSelectedRawProvider(providerObj || { name: p.name, raw: providerError ? { error: providerError } : { note: 'No key provided for this provider in .env' } })}
                         className="mt-3 bg-white/10 hover:bg-white/20 text-white text-[11px] font-semibold py-1.5 rounded-xl flex items-center justify-center gap-1 cursor-pointer transition-all border border-white/15"
                       >
                         <FileCode size={12} className="text-accent" />

@@ -165,14 +165,32 @@ async function fetchOpenWeatherMap(lat, lon, key) {
 }
 
 // Fetch AccuWeather Data
+//
+// AccuWeather relaunched its developer portal on 2025-09-09: every legacy API key
+// was retired and authentication moved to `Authorization: Bearer <key>` (the old
+// `?apikey=` query parameter now returns 401 "API authorization failed"). There is
+// no free tier any more — a 14-day trial, then the paid Starter plan.
+//
+// Two caveats for this browser-side path:
+//   1. A key placed in VITE_ACCUWEATHER_KEY ships inside the public bundle. AccuWeather's
+//      own guidance is to keep keys server-side and proxy from the backend, which is what
+//      backend/services/fusion.py does (GET /fusion). Prefer that for production.
+//   2. dataservice.accuweather.com does not send CORS headers for every plan, so the
+//      browser may block the call outright. The failure is reported through
+//      `providerErrors` on the ensemble result instead of being swallowed.
 async function fetchAccuWeather(lat, lon, key) {
   if (!key) return null
+  const authHeaders = {
+    Authorization: `Bearer ${key}`,
+    Accept: 'application/json',
+  }
   try {
     // Step 1: Geoposition search for Location Key
     const locRes = await axios.get(
       'https://dataservice.accuweather.com/locations/v1/cities/geoposition/search',
       {
-        params: { apikey: key, q: `${lat},${lon}` },
+        params: { q: `${lat},${lon}` },
+        headers: authHeaders,
         timeout: 8000,
       }
     )
@@ -183,7 +201,8 @@ async function fetchAccuWeather(lat, lon, key) {
     const condRes = await axios.get(
       `https://dataservice.accuweather.com/currentconditions/v1/${locKey}`,
       {
-        params: { apikey: key, details: 'true' },
+        params: { details: 'true' },
+        headers: authHeaders,
         timeout: 8000,
       }
     )
@@ -204,8 +223,29 @@ async function fetchAccuWeather(lat, lon, key) {
       raw: condRes.data,
     }
   } catch (err) {
-    console.warn('AccuWeather fetch failed:', err.message)
-    return null
+    const status = err?.response?.status
+    const upstream = err?.response?.data?.Message || err?.response?.data?.message
+    if (status === 401) {
+      throw new Error(
+        'AccuWeather rejected the API key (401). Keys from the legacy developer portal were ' +
+          'retired on 2025-09-09 — issue a new one at developer.accuweather.com ' +
+          (upstream ? `(${upstream})` : '')
+      )
+    }
+    if (status === 403) {
+      throw new Error(`AccuWeather plan does not include this endpoint (403)${upstream ? `: ${upstream}` : ''}`)
+    }
+    if (status === 429) {
+      throw new Error(`AccuWeather quota exceeded (429)${upstream ? `: ${upstream}` : ''}`)
+    }
+    if (!err?.response) {
+      throw new Error(
+        'AccuWeather request never reached the API (CORS or network). The browser blocks ' +
+          'dataservice.accuweather.com unless the plan allows it — proxy it through the backend ' +
+          '(GET /fusion) instead of embedding the key in the client.'
+      )
+    }
+    throw new Error(`AccuWeather fetch failed (HTTP ${status})${upstream ? `: ${upstream}` : ''}`)
   }
 }
 
@@ -215,14 +255,26 @@ async function fetchAccuWeather(lat, lon, key) {
 export async function getEnsembleWeather(lat, lon, days = 14) {
   const keys = getProviderKeys()
 
-  // Execute all telemetry calls in parallel
-  const results = await Promise.allSettled([
-    fetchOpenMeteo(lat, lon, days),
-    fetchWeatherAPI(lat, lon, keys.weatherapi),
-    fetchTomorrowIO(lat, lon, keys.tomorrow),
-    fetchOpenWeatherMap(lat, lon, keys.openweather),
-    fetchAccuWeather(lat, lon, keys.accuweather),
-  ])
+  // Execute all telemetry calls in parallel. A provider that hard-fails (expired
+  // key, missing subscription, CORS block) rejects instead of returning null so
+  // the reason can be reported rather than silently shrinking the ensemble.
+  const providers = [
+    { name: 'Open-Meteo (ECMWF)', run: () => fetchOpenMeteo(lat, lon, days) },
+    { name: 'WeatherAPI.com', run: () => fetchWeatherAPI(lat, lon, keys.weatherapi) },
+    { name: 'Tomorrow.io', run: () => fetchTomorrowIO(lat, lon, keys.tomorrow) },
+    { name: 'OpenWeatherMap', run: () => fetchOpenWeatherMap(lat, lon, keys.openweather) },
+    { name: 'AccuWeather', run: () => fetchAccuWeather(lat, lon, keys.accuweather) },
+  ]
+  const results = await Promise.allSettled(providers.map((p) => p.run()))
+
+  const providerErrors = {}
+  results.forEach((r, i) => {
+    if (r.status === 'rejected') {
+      const message = r.reason?.message || String(r.reason)
+      providerErrors[providers[i].name] = message
+      console.warn(`${providers[i].name} dropped from the ensemble:`, message)
+    }
+  })
 
   const allSources = results
     .filter((r) => r.status === 'fulfilled' && r.value !== null)
@@ -316,5 +368,8 @@ export async function getEnsembleWeather(lat, lon, days = 14) {
       weight: s.weight,
       outlier: !!s.outlier,
     })),
+    // Vendors that were configured but failed, with the upstream reason.
+    // Mirrors `provider_errors` from the backend fusion engine.
+    providerErrors,
   }
 }

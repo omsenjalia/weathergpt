@@ -609,7 +609,7 @@ async def weather_health() -> dict[str, Any]:
     provider_health = {}
     for name, provider in service.providers.items():
         eligible, reason = provider.is_eligible("forecast", 22.0, 72.0)  # sample India coords
-        provider_health[name.value] = {
+        entry = {
             "configured": provider.is_configured(),
             "eligible": eligible,
             "reason": reason,
@@ -621,6 +621,16 @@ async def weather_health() -> dict[str, Any]:
                 "freshness_budget_hours": provider.capability.freshness_budget_hours,
             },
         }
+        # AccuWeather reports why a key stopped working (401 = legacy key retired
+        # by the 2025-09-09 portal migration, 403 = plan does not sell the
+        # endpoint, 429 = quota). Other providers keep the base shape.
+        diagnostics = getattr(provider, "diagnostics", None)
+        if callable(diagnostics):
+            try:
+                entry["diagnostics"] = diagnostics()
+            except Exception as exc:  # pragma: no cover - diagnostics must never fail health
+                entry["diagnostics"] = {"error": type(exc).__name__}
+        provider_health[name.value] = entry
 
     weathernext_bigquery = None
     try:

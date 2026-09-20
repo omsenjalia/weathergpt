@@ -25,6 +25,13 @@ Algorithm
    values are never substituted with defaults.
 4. The categorical `weathercode`/`condition` are taken from the highest-weighted provider
    that supplied one (Open-Meteo when available).
+5. Provider failures are non-fatal but no longer silent: the payload carries
+   `provider_errors` ({vendor: reason}) so an expired AccuWeather key or a missing
+   Tomorrow.io subscription shows up in `GET /fusion` instead of quietly shrinking the mean.
+
+AccuWeather note: since the 2025-09-09 portal migration every AccuWeather call must send
+`Authorization: Bearer <key>` (all legacy `?apikey=` keys were retired) and there is no
+free tier any more — see `services/providers/accuweather.py`.
 """
 
 from __future__ import annotations
@@ -159,19 +166,73 @@ def reading_from_open_meteo_current(current: dict[str, Any]) -> ProviderReading 
     )
 
 
+def _accuweather_get(client: httpx.Client, url: str, params: dict[str, Any], key: str) -> httpx.Response:
+    """GET an AccuWeather endpoint with the post-2025 portal authentication.
+
+    AccuWeather relaunched its developer portal on 2025-09-09 (and retired every
+    legacy key). The documented auth is now ``Authorization: Bearer <key>`` over
+    HTTPS; the historical ``?apikey=`` query parameter only works for keys that
+    predate the migration. ``ACCUWEATHER_AUTH_MODE=query`` restores the old
+    behaviour, ``auto`` retries a 401 with the query parameter.
+    """
+    mode = (os.getenv("ACCUWEATHER_AUTH_MODE") or "bearer").strip().lower()
+    order = ["bearer", "query"] if mode == "auto" else ["query"] if mode == "query" else ["bearer"]
+    headers = {"Accept": "application/json", "Accept-Encoding": "gzip,deflate"}
+
+    last: httpx.Response | None = None
+    for auth in order:
+        request_params = dict(params)
+        request_headers = dict(headers)
+        if auth == "query":
+            request_params["apikey"] = key
+        else:
+            request_headers["Authorization"] = f"Bearer {key}"
+        response = client.get(url, params=request_params, headers=request_headers)
+        last = response
+        if response.status_code != 401:
+            return response
+    assert last is not None
+    return last
+
+
+def _accuweather_error_detail(response: httpx.Response) -> str:
+    """Human-readable upstream reason (the new gateway returns Code/Message)."""
+    try:
+        body = response.json()
+    except Exception:
+        return ""
+    if isinstance(body, dict):
+        message = body.get("Message") or body.get("message") or body.get("title") or ""
+        if message:
+            return str(message)[:200]
+    return ""
+
+
 def _fetch_accuweather(client: httpx.Client, lat: float, lon: float) -> ProviderReading | None:
     key = _provider_key("AccuWeather")
-    loc = client.get(
+    loc = _accuweather_get(
+        client,
         "https://dataservice.accuweather.com/locations/v1/cities/geoposition/search",
-        params={"apikey": key, "q": f"{lat},{lon}"},
+        {"q": f"{lat},{lon}"},
+        key,
     )
+    if loc.status_code in (401, 403):
+        detail = _accuweather_error_detail(loc)
+        hint = (
+            "key rejected — legacy AccuWeather keys were retired on 2025-09-09"
+            if loc.status_code == 401 else
+            "subscription does not include this endpoint"
+        )
+        raise RuntimeError(f"AccuWeather HTTP {loc.status_code}: {hint}" + (f" ({detail})" if detail else ""))
     loc.raise_for_status()
     loc_key = (loc.json() or {}).get("Key")
     if not loc_key:
         return None
-    cond = client.get(
+    cond = _accuweather_get(
+        client,
         f"https://dataservice.accuweather.com/currentconditions/v1/{loc_key}",
-        params={"apikey": key, "details": "true"},
+        {"details": "true"},
+        key,
     )
     cond.raise_for_status()
     data = (cond.json() or [None])[0] or {}
@@ -382,6 +443,7 @@ def fuse_current_weather(
     timeout = timeout_s or PROVIDER_TIMEOUT_S
     names = configured_providers()
     readings: list[ProviderReading] = []
+    provider_errors: dict[str, str] = {}
 
     pre_fetched = reading_from_open_meteo_current(open_meteo_current) if open_meteo_current else None
     if pre_fetched is not None:
@@ -400,10 +462,20 @@ def fuse_current_weather(
                             if reading is not None:
                                 readings.append(reading)
                         except Exception as exc:  # provider-level failure is non-fatal
-                            print(f"[fusion] {futures[fut]} failed: {exc}")
+                            provider_name = futures[fut]
+                            provider_errors[provider_name] = str(exc)[:300]
+                            print(f"[fusion] {provider_name} failed: {exc}")
         except Exception as exc:
+            provider_errors["_pool"] = str(exc)[:300]
             print(f"[fusion] provider pool failed: {exc}")
 
     if not readings:
-        return {"error": "Failed to retrieve weather data from providers"}
-    return fuse_readings(readings)
+        return {
+            "error": "Failed to retrieve weather data from providers",
+            "provider_errors": provider_errors,
+        }
+    fused = fuse_readings(readings)
+    # Diagnostics only: which configured vendor failed and why (e.g. an expired
+    # AccuWeather key). Never affects the fused values.
+    fused["provider_errors"] = provider_errors
+    return fused

@@ -262,6 +262,11 @@ weathergpt/
 | `GROQ_MODEL` | Optional | Primary model override (default: `openai/gpt-oss-120b`) |
 | `WEATHERAPI_KEY` | Optional | WeatherAPI key for backend tool-level fusion |
 | `OPENWEATHER_KEY` | Optional | OpenWeatherMap key for backend tool-level fusion |
+| `ACCUWEATHER_KEY` | Optional | AccuWeather key issued by the **new** developer portal (post 2025-09-09); sent as `Authorization: Bearer` |
+| `ACCUWEATHER_AUTH_MODE` | Optional | `bearer` (default) \| `query` (legacy `?apikey=`) \| `auto` (try bearer, retry query on 401) |
+| `ACCUWEATHER_MAX_FORECAST_DAYS` | Optional | Daily horizon the plan sells — `5` Starter/Standard (default), `10` Prime, `15` Elite |
+| `ACCUWEATHER_LOCATION_KEY_TTL_HOURS` | Optional | Location-key cache TTL (default `720`); each forecast otherwise costs 2–3 paid calls |
+| `ACCUWEATHER_CREDENTIAL_COOLDOWN_SECONDS` | Optional | Latch a 401/403-rejected key out for this long (default `900`); `0` retries every request |
 
 > [!TIP]
 > **Graceful Key Fallbacks**: The system operates out-of-the-box even with minimal environment keys. If secondary provider keys are omitted, the ensemble engine gracefully recalibrates weights among active providers.
@@ -459,12 +464,39 @@ WeatherGPT fuses data across 5 distinct meteorological sources. The priority ord
 | Priority | Provider | Trust Weight | Key | Coverage | Provided Metrics |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **1** | **Open-Meteo (ECMWF/IMD Standard)** | **2.0×** | none (always on) | Global / India | Temp, feels like, humidity, wind, pressure, UV, WMO code, hourly, daily |
-| **2** | **AccuWeather** | **1.5×** | `ACCUWEATHER_KEY` | Global | Temp, RealFeel, humidity, wind, pressure, UV, condition text |
+| **2** | **AccuWeather** | **1.5×** | `ACCUWEATHER_KEY` (new portal, `Bearer` auth, paid plans only) | Global | Temp, RealFeel, humidity, wind, pressure, UV, condition text |
 | 3 | WeatherAPI.com | 1.2× | `WEATHERAPI_KEY` | Global / India | Temp, feels like, humidity, wind, pressure, UV, AQI, PM2.5, PM10 |
 | 3 | Tomorrow.io | 1.2× | `TOMORROW_KEY` | Global | Temp, feels like, humidity, wind speed, surface pressure, UV |
 | 4 | OpenWeatherMap | 1.1× | `OPENWEATHER_KEY` | Global | Temp, feels like, humidity, wind speed, pressure, conditions |
 
 The weights are defined once in `backend/services/fusion.py::PROVIDER_WEIGHTS` and mirrored in `frontend/src/utils/ensembleEngine.js::PROVIDER_WEIGHTS`. The server engine is authoritative: it powers `GET /weather` (Android home screen), `GET /fusion` (Dev Suite Ensemble Inspector), the agent's `get_current_weather` tool and the deterministic chat fallback. The client-side engine remains for the web dashboard's direct-fetch path and applies the identical algorithm.
+
+> [!IMPORTANT]
+> **AccuWeather portal migration (9 September 2025).** AccuWeather moved its self-serve APIs to a new
+> gateway (Zuplo on Akamai) and, in the same change, **retired every legacy API key** and **ended the
+> free tier**. Three consequences are baked into this codebase:
+>
+> 1. **Authentication** — every request must carry `Authorization: Bearer <key>` over HTTPS. The
+>    historical `?apikey=` parameter now returns `401 {"Code":"Unauthorized","Message":"API
+>    authorization failed"}`. `ACCUWEATHER_AUTH_MODE=auto` retries the legacy form once for keys that
+>    still require it.
+> 2. **Plans cap the horizon** — 14-day trial (500 calls/day) → Starter $2/mo (15,000 calls/month,
+>    current conditions + 12-hour hourly + **5-day** daily) → Standard $25/mo (5-day) → Prime $250/mo
+>    (10-day) → Elite $500/mo (15-day). Requesting a wider daily endpoint returns `403`, so the
+>    provider clamps to `ACCUWEATHER_MAX_FORECAST_DAYS` and transparently retries `daily/5day` on a 403.
+> 3. **Calls are scarce** — a forecast costs a geoposition lookup plus the daily endpoint (plus current
+>    conditions), so resolved location keys are cached for `ACCUWEATHER_LOCATION_KEY_TTL_HOURS`.
+>
+> AccuWeather failures are never silent and never fatal: the gateway's own `Code`/`Message` is mapped to
+> `invalid_credentials` (401), `subscription_limit` (403), `rate_limited` (429), `network_*` (unreachable)
+> or `timeout`, recorded in `fallback_reasons`, and `auto` mode falls through to Open-Meteo. A rejected key
+> is latched out for `ACCUWEATHER_CREDENTIAL_COOLDOWN_SECONDS` so it cannot add latency to every request.
+> Live state — auth mode, plan horizon, credential failures, latch, last upstream error, cached keys —
+> is exposed by `GET /v2/weather/health` (`provider_health.accuweather.diagnostics`) and `GET /dev`
+> (`accuweather`); the legacy fusion engine reports per-vendor failures in `GET /fusion` →
+> `provider_errors`, and the client engine in `providerErrors` (rendered by the Dev Suite Data Pipeline tab).
+> Neither path ever prints the key. Note that `VITE_ACCUWEATHER_KEY` ships inside the public JS bundle and
+> browser calls to `dataservice.accuweather.com` can be CORS-blocked — prefer the server-side proxy.
 
 ### 10.2 Fusion Algorithm
 

@@ -42,7 +42,28 @@ WeatherGPT automatically blends active providers (queried in parallel, outliers 
 | **WeatherAPI.com** | `VITE_WEATHERAPI_KEY` / `WEATHERAPI_KEY` | ~1 km | Sign up at [weatherapi.com](https://www.weatherapi.com/signup.aspx). Free tier: **1,000,000 req/mo** |
 | **Tomorrow.io** | `VITE_TOMORROW_KEY` / `TOMORROW_KEY` | 100 meters | Sign up at [tomorrow.io](https://www.tomorrow.io/weather-api/). Free tier: **500 req/day** |
 | **OpenWeatherMap** | `VITE_OPENWEATHER_KEY` / `OPENWEATHER_KEY` | 1–5 km | Sign up at [openweathermap.org](https://home.openweathermap.org/users/sign_up). Free tier: **1,000 req/day** |
-| **AccuWeather** | `VITE_ACCUWEATHER_KEY` / `ACCUWEATHER_KEY` | ~1 km | Sign up at [developer.accuweather.com](https://developer.accuweather.com/). Free tier: **50 req/day** |
+| **AccuWeather** | `ACCUWEATHER_KEY` (server-side; avoid `VITE_`) | ~1 km | New portal at [developer.accuweather.com](https://developer.accuweather.com/). **No free tier since 2025-09-09** — 14-day trial (**500 req/day**), then Starter **$2/mo** (15,000 req/month, 5-day forecasts). Auth is `Authorization: Bearer <key>` |
+
+### ⚠️ AccuWeather stopped working? (portal migration, 9 Sep 2025)
+
+AccuWeather replaced its developer portal (Apigee → Zuplo/Akamai) on **2025-09-09** and, in the
+same change, **retired every legacy API key** and **ended the free tier**. The practical effects:
+
+| Symptom | Cause | Fix |
+| :--- | :--- | :--- |
+| `401 Unauthorized` / `"API authorization failed"` | Key was issued by the legacy portal, or is being sent as `?apikey=` | Issue a new key at [developer.accuweather.com](https://developer.accuweather.com) and keep `ACCUWEATHER_AUTH_MODE=bearer` (default) |
+| `403 Forbidden` | The plan does not sell that endpoint — Starter/Standard cap daily forecasts at **5 days** (10 needs Prime, 15 needs Elite) | Set `ACCUWEATHER_MAX_FORECAST_DAYS=5`; the backend also auto-retries the 5-day endpoint on a 403 |
+| `429` / quota exceeded | 14-day trial (500 calls/day) expired, or the 15,000 calls/month Starter budget is gone | Upgrade, or leave `ACCUWEATHER_KEY` unset and let Open-Meteo serve the request |
+| Browser console `CORS` error | `dataservice.accuweather.com` is not a browser endpoint for every plan | Do not set `VITE_ACCUWEATHER_KEY`; use the server-side proxy (`GET /fusion`) |
+
+If you do re-enable AccuWeather, note its **branding requirement**: the AccuWeather logo, linked to
+[accuweather.com](https://www.accuweather.com/), must appear on every screen where its data is shown.
+
+WeatherGPT never hard-fails on any of these: `auto` mode records a structured `fallback_reason`
+(`invalid_credentials`, `subscription_limit`, `rate_limited`) and falls through to Open-Meteo, and a
+rejected key is latched out for `ACCUWEATHER_CREDENTIAL_COOLDOWN_SECONDS` (default 900 s) so it cannot
+add latency to every request. Diagnose live with `GET /v2/weather/health` or `GET /dev` →
+`accuweather.diagnostics` (auth mode, plan horizon, last upstream error, latch state — never the key).
 
 ---
 
