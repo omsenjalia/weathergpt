@@ -173,6 +173,7 @@ def candidate_init_times(
     horizon_hours: int,
     max_horizon: int,
     run_id: Optional[str] = None,
+    freshness_hours: Optional[float] = None,
 ) -> list[datetime]:
     """Newest-first list of init times worth querying for ``horizon_hours``."""
     if run_id:
@@ -183,7 +184,14 @@ def candidate_init_times(
 
     latest_allowed = (now - timedelta(hours=delivery_latency_hours)).astimezone(timezone.utc)
     t = latest_allowed.replace(minute=0, second=0, microsecond=0)
-    floor = now - timedelta(hours=72)  # never look further back than 3 days
+    # Never look further back than 3 days, and never past the *expiry* horizon
+    # (2x the freshness budget): a run older than that is expired and cannot be
+    # served even with allow_stale, so querying its partition only burns a
+    # BigQuery job that the freshness gate is guaranteed to reject.
+    lookback_hours = 72.0
+    if freshness_hours and freshness_hours > 0:
+        lookback_hours = min(lookback_hours, 2.0 * float(freshness_hours))
+    floor = now - timedelta(hours=lookback_hours)
     out: list[datetime] = []
     while len(out) < max_attempts and t >= floor:
         if t.hour in policy_run_hours and run_horizon_hours(t, max_horizon) >= min(horizon_hours, max_horizon):
@@ -486,6 +494,7 @@ class WeatherNextBigQueryAdapter:
             horizon,
             policy.max_horizon_hours,
             run_id=run_id,
+            freshness_hours=policy.freshness_hours,
         )
         if not candidates:
             raise WeatherNextQueryError("no_candidate_run", "Run policy produced no candidate init times")
