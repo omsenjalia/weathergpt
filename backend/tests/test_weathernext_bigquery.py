@@ -437,13 +437,31 @@ def test_adapter_reports_no_recent_run_when_nothing_delivered(clean_state):
     assert len(excinfo.value.details["attempted_runs"]) == 3
 
 
-def test_adapter_dry_run_estimate(clean_state):
+def test_adapter_dry_run_estimate_is_uncapped_and_compared_locally(clean_state):
     _set_env(clean_state, GOOGLE_APPLICATION_CREDENTIALS_JSON=SA_JSON)
-    adapter = _install_fake_adapter(clean_state, FakeBigQueryClient({}))
+    client = FakeBigQueryClient({})
+    adapter = _install_fake_adapter(clean_state, client)
     est = adapter.estimate_point_query(22.56, 72.95, horizon_hours=72)
     assert est["estimated_bytes_upper_bound"] == 4_190_000_000
     assert est["within_cap"] is True
+    assert est["budget_status"] == "within_cap"
+    assert client.calls[0]["config"].maximum_bytes_billed is None
     assert adapter.query_count == 0  # dry runs are not billed / counted
+
+
+def test_adapter_dry_run_reports_a_small_cap_without_failing(clean_state):
+    _set_env(
+        clean_state,
+        GOOGLE_APPLICATION_CREDENTIALS_JSON=SA_JSON,
+        WEATHERNEXT_BQ_MAX_BYTES_BILLED="1000000",
+    )
+    client = FakeBigQueryClient({})
+    adapter = _install_fake_adapter(clean_state, client)
+    est = adapter.estimate_point_query(22.56, 72.95, horizon_hours=72)
+    assert est["within_cap"] is False
+    assert est["budget_status"] == "estimate_exceeds_cap"
+    assert est["maximum_bytes_billed"] == 1_000_000
+    assert client.calls[0]["config"].maximum_bytes_billed is None
 
 
 def test_error_classification_is_stable_and_redacted():
@@ -699,6 +717,9 @@ def test_bytes_cap_violation_surfaces_required_bytes(clean_state):
     reason = result.fallback_reasons[-1]
     assert reason["reason"] == "bytes_billed_limit_exceeded"
     assert reason["required_bytes"] == 4194304000
+    assert reason["configured_max_bytes_billed"] == 1_000_000
+    assert reason["retryable"] is False
+    assert reason["required_gib"] == round(4194304000 / 1024 ** 3, 3)
 
 
 def test_legacy_weather_endpoint_accepts_requested_source(clean_state):
