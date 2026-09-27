@@ -7,6 +7,7 @@ import wave
 
 import httpx
 import pytest
+import struct
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -122,6 +123,31 @@ def test_long_text_is_chunked_and_wavs_are_joined():
     total = sum(len(body["inputData"]["input"][0]["source"]) for _, _, body in compute_calls)
     with wave.open(io.BytesIO(base64.b64decode(result["audio_base64"])), "rb") as w:
         assert w.getnframes() == total
+
+
+def _float_wav(samples: int, rate: int = 22050) -> bytes:
+    """IEEE-float (format tag 3) mono WAV, the format Bhashini TTS actually returns."""
+    fmt = struct.pack("<HHIIHH", 3, 1, rate, rate * 4, 4, 32)
+    data = struct.pack(f"<{samples}f", *([0.25] * samples))
+    return (
+        b"RIFF" + struct.pack("<I", 4 + 8 + len(fmt) + 8 + len(data)) + b"WAVE"
+        + b"fmt " + struct.pack("<I", len(fmt)) + fmt
+        + b"data" + struct.pack("<I", len(data)) + data
+    )
+
+
+def test_float_wavs_are_joined_and_report_their_sample_rate():
+    joined, rate = bhashini.concat_wavs([_float_wav(100), _float_wav(50)])
+    assert rate == 22050
+    fmt, frames = bhashini._parse_wav(joined)
+    assert struct.unpack("<HHIIHH", fmt[:16]) == (3, 1, 22050, 88200, 4, 32)
+    assert len(frames) == 150 * 4
+    assert bhashini._wav_rate(_float_wav(10, rate=16000)) == 16000
+
+
+def test_mismatched_wav_formats_are_an_upstream_error():
+    with pytest.raises(bhashini.SpeechUpstreamError):
+        bhashini.concat_wavs([_float_wav(10), _wav(10)])
 
 
 def test_split_keeps_indic_sentences_and_hard_wraps_run_ons():
