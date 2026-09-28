@@ -164,7 +164,10 @@ def test_vercel_entrypoint():
     from api.index import app
     assert app.title == "WeatherGPT API"
     cfg = json.loads((Path(__file__).parents[1] / "vercel.json").read_text())
-    assert cfg["rewrites"][0]["destination"] == "/api/index"
+    # A catch-all rewrite to /api/index makes FastAPI see every request as /api/index
+    # (production answered 404 for every route); Vercel routes paths to the app itself.
+    assert "rewrites" not in cfg and "routes" not in cfg
+    assert cfg["functions"]["api/index.py"]["maxDuration"] == 60
 
 
 def test_float_wav_chunks_are_joined():
