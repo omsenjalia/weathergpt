@@ -1,10 +1,10 @@
 """Registry of every API published by the IMD gateway (https://api.imd.gov.in).
 
-Source: the public reference https://api.imd.gov.in/public/api_reference.html
-(28 APIs). Twenty have documented paths under ``/api/v1``. Eight appear only in
-the index (the detailed docs sit behind the portal login), so their paths here
-are provisional: ``verified=False``, and each can be corrected without a code
-change via ``IMD_ENDPOINT_<KEY>`` (e.g. ``IMD_ENDPOINT_AGROMET=agromet_advisory``).
+Source: the account API docs (https://api.imd.gov.in/public/api_docs.php) — 21 APIs,
+all verified live on 2026-09-28. The public api_reference.html also lists cyclone, radar,
+lightning, agromet, highway, fishermen, Mausamgram and all-India bulletin APIs, but the
+gateway answers 404 "API not found" for them, so they are not registered. A path can be
+overridden without a code change via ``IMD_ENDPOINT_<KEY>``.
 ``GET /dev/imd/probe`` calls every endpoint and reports which paths answer.
 
 The gateway authenticates *before* routing (any unknown path also returns
@@ -35,6 +35,7 @@ class Endpoint:
     description: str
     params: tuple[Param, ...] = ()
     verified: bool = True
+    in_account_docs: bool = True
     cache_seconds: int = 600
     # A cheap parameter set used by the probe (keeps responses small).
     probe_params: dict = field(default_factory=dict)
@@ -51,6 +52,7 @@ class Endpoint:
             "group": self.group,
             "path": f"/api/v1/{self.resolved_path()}",
             "path_verified": self.verified or bool(os.getenv(f"IMD_ENDPOINT_{self.key.upper()}")),
+            "in_account_docs": self.in_account_docs,
             "override_env": f"IMD_ENDPOINT_{self.key.upper()}",
             "description": self.description,
             "params": [{"name": p.name, "description": p.description, "example": p.example, "required": p.required}
@@ -75,6 +77,11 @@ ENDPOINTS: tuple[Endpoint, ...] = (
              "Same as city_forecast plus station Latitude/Longitude; used to find the nearest IMD station.",
              _ID("City station code (omit for all stations)", "42182"), cache_seconds=1800,
              probe_params={"id": "42182"}, fields=("...city_forecast fields", "Latitude", "Longitude")),
+    Endpoint("city_forecast_warning", "City Forecast with Warnings (7 days)", "forecast", "cityforecastwarning",
+             "City 7-day forecast including warnings.", _ID("City station code (omit for all stations)", "42182"),
+             cache_seconds=1800, probe_params={"id": "42182"}),
+    Endpoint("tourist_forecast", "Tourist Forecast", "forecast", "touristforecast",
+             "Forecast for tourist destinations.", _ID("Destination id (omit for all)", None), cache_seconds=1800),
     Endpoint("city_forecast_mapping", "City Forecast Mapping", "forecast", "cityforecast_mapping",
              "Station code/name mapping for the city forecast APIs.", cache_seconds=86400),
     Endpoint("subdivision_rainfall_forecast", "Subdivision Rainfall Forecast (7 days)", "forecast",
@@ -86,13 +93,6 @@ ENDPOINTS: tuple[Endpoint, ...] = (
              "state_district_rainfall_forecast", "Rainfall distribution per district for 5 days.", cache_seconds=3600,
              fields=("date_obs", "Obj_id", "District", "State", "dayN_color", "dayN_distribution",
                      "dayN_distribution_percentage")),
-    Endpoint("all_india_bulletin", "All India Weather Forecast Bulletin", "forecast", "allindia_bulletin",
-             "National forecast bulletin text.", verified=False, cache_seconds=3600),
-    Endpoint("mausamgram", "Weather at your location (Mausamgram)", "forecast", "mausamgram",
-             "Point (lat/lon) forecast from IMD's Mausamgram service.",
-             (Param("lat", "Latitude", "28.61", True), Param("lon", "Longitude", "77.21", True)),
-             verified=False, probe_params={"lat": "28.61", "lon": "77.21"}),
-    # --- Current weather & nowcast -----------------------------------------
     Endpoint("current_weather", "Current Weather", "current", "current_wx",
              "Latest surface observation per station: temperature, MSLP, wind, humidity, present-weather code, nebulosity.",
              _ID("Station ID (omit for all stations)", "42182"), cache_seconds=600, probe_params={"id": "42182"},
@@ -127,7 +127,7 @@ ENDPOINTS: tuple[Endpoint, ...] = (
              _ID("District object ID", "164"), cache_seconds=3600, probe_params={"id": "164"}),
     Endpoint("state_rainfall", "State-wise Rainfall", "rainfall", "staterainfall",
              "Daily/weekly/monthly/cumulative actual vs normal rainfall per state.",
-             _ID("State name", "jammu"), cache_seconds=3600, probe_params={"id": "jammu"}),
+             _ID("State name", "GUJARAT"), cache_seconds=3600, probe_params={"id": "GUJARAT"}),
     Endpoint("basin_qpf", "River Basin QPF", "rainfall", "basinqpf",
              "Quantitative precipitation forecast per river sub-basin for 5 days.",
              _ID("Basin ID", "100"), cache_seconds=3600, probe_params={"id": "100"}),
@@ -138,33 +138,10 @@ ENDPOINTS: tuple[Endpoint, ...] = (
              _ID("Area ID", "108"), cache_seconds=1800, probe_params={"id": "108"}),
     Endpoint("coastal_bulletin", "Coastal Bulletin", "marine", "coastalbulletin", "Coastal area forecast bulletin.",
              cache_seconds=1800),
-    Endpoint("fishermen_warning", "Fishermen Warning", "marine", "fishermen_warning",
-             "Warnings for fishermen.", verified=False, cache_seconds=900),
-    # --- Cyclone ------------------------------------------------------------------------
-    Endpoint("cyclone_track", "Cyclone Track", "cyclone", "cyclone_track",
-             "Observed and forecast track of the active cyclone.", cache_seconds=600),
-    Endpoint("cyclone_wind", "Cyclone Wind Warning", "cyclone", "cyclone_wind",
-             "27/34/50/64 kt wind radii as GeoJSON MultiPolygons.", cache_seconds=600),
-    Endpoint("cyclone_cone", "Cyclone Cone of Uncertainty", "cyclone", "cyclone_cou",
-             "Track cone of uncertainty as a GeoJSON MultiPolygon.", cache_seconds=600),
-    # --- Astronomy --------------------------------------------------------------------------
     Endpoint("sun_moon", "Sun & Moon Rise/Set", "astronomy", "sunmoon",
              "Sunrise, sunset, moonrise and moonset (IST) for a point.",
              (Param("lat", "Latitude", "26.9124", True), Param("lon", "Longitude", "75.7873", True)),
              cache_seconds=21600, probe_params={"lat": "26.9124", "lon": "75.7873"}),
-    # --- NHAI ---------------------------------------------------------------------------------
-    Endpoint("highway_nowcast", "Highway Nowcast Warning", "highway", "highway_nowcast",
-             "Nowcast warnings along national highways.", verified=False, cache_seconds=300),
-    Endpoint("highway_warning", "Highway Warning (5 days)", "highway", "highway_warning",
-             "5-day warnings along national highways.", verified=False, cache_seconds=900),
-    # --- Radar & lightning ------------------------------------------------------------------
-    Endpoint("radar", "Radar Image", "radar", "radar", "Doppler weather radar products.", verified=False,
-             cache_seconds=300),
-    Endpoint("lightning", "Lightning Data", "radar", "lightning", "Lightning strike data.", verified=False,
-             cache_seconds=300),
-    # --- Agromet ---------------------------------------------------------------------------------
-    Endpoint("agromet", "Agromet Advisory", "agromet", "agromet",
-             "District agro-meteorological advisory for farmers.", verified=False, cache_seconds=3600),
 )
 
 BY_KEY: dict[str, Endpoint] = {e.key: e for e in ENDPOINTS}

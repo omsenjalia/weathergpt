@@ -4,6 +4,10 @@ GET /v2/imd                 catalog of all endpoints + configuration status (no 
 GET /v2/imd/nearest         nearest IMD city station, its observation and the point's district
 GET /v2/imd/{endpoint}      proxy one endpoint (id / sid / lat / lon query params pass through)
 
+IMD's terms prohibit unauthorized redistribution, so raw data from /nearest and
+/{endpoint} needs ``X-Admin-Token`` unless IMD_PUBLIC_PROXY=1. The apps get IMD data
+through /v2/weather, /v2/alerts and /chat, which are unaffected.
+
 Errors: 503 {code: imd_not_configured}, 502 {code: imd_error, reason} (e.g. token_invalid_or_expired,
 forbidden_ip_not_whitelisted), 404 unknown endpoint.
 """
@@ -12,11 +16,13 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import Response
 
 from weathergpt import geo
+from weathergpt.api.dev import require_admin
+from weathergpt.config import settings
 from weathergpt.imd import client, endpoints, stations
 
 router = APIRouter(prefix="/v2/imd", tags=["imd"])
@@ -29,6 +35,11 @@ def _raise(exc: client.IMDError) -> None:
                                                  "upstream_status": exc.status})
 
 
+def _gate(token: Optional[str]) -> None:
+    if not settings().imd.public_proxy:
+        require_admin(token)
+
+
 @router.get("")
 @router.get("/", include_in_schema=False)
 async def imd_catalog() -> dict[str, Any]:
@@ -37,7 +48,9 @@ async def imd_catalog() -> dict[str, Any]:
 
 
 @router.get("/nearest")
-async def imd_nearest(lat: float = Query(..., ge=-90, le=90), lon: float = Query(..., ge=-180, le=180)) -> dict:
+async def imd_nearest(lat: float = Query(..., ge=-90, le=90), lon: float = Query(..., ge=-180, le=180),
+                      x_admin_token: Optional[str] = Header(None)) -> dict:
+    _gate(x_admin_token)
     def work() -> dict:
         try:
             station = stations.nearest_city_station(lat, lon)
@@ -58,7 +71,9 @@ async def imd_proxy(
     lat: Optional[float] = Query(None, ge=-90, le=90),
     lon: Optional[float] = Query(None, ge=-180, le=180),
     limit: int = Query(0, ge=0, le=5000, description="Truncate rows (0 = all)"),
+    x_admin_token: Optional[str] = Header(None),
 ):
+    _gate(x_admin_token)
     ep = endpoints.get(key)
     if ep is None:
         raise HTTPException(status_code=404, detail={"code": "unknown_endpoint", "endpoints": list(endpoints.BY_KEY)})

@@ -53,7 +53,12 @@ def observation_for(station: Station, rows: Optional[list[dict]] = None) -> Opti
     """
     if rows is not None:
         return _match(station, rows)
-    row = _match(station, list(iter_dicts(client.fetch("current_weather", {"id": station.code}).rows)))
+    try:
+        row = _match(station, list(iter_dicts(client.fetch("current_weather", {"id": station.code}).rows)))
+    except client.IMDError as exc:
+        if exc.reason != "bad_request":  # IMD answers 400 "Invalid ID or No Data" for non-reporting stations
+            raise
+        row = None
     if row is not None:
         return row
     return _match(station, list(iter_dicts(client.fetch("current_weather").rows)))
@@ -68,3 +73,39 @@ def _match(station: Station, rows: list[dict]) -> Optional[dict]:
         if (text(row, "Station", "Station Name", "Station_Name") or "").strip().lower() == name:
             return row
     return None
+
+
+def _station_coords() -> dict[str, tuple[float, float, str]]:
+    """code -> (lat, lon, name) from the station lists IMD publishes with coordinates."""
+    coords: dict[str, tuple[float, float, str]] = {}
+    for key in ("city_forecast_mapping", "city_forecast_loc"):
+        try:
+            rows = client.fetch(key).rows
+        except client.IMDError:
+            continue
+        for row in iter_dicts(rows):
+            code = station_code(text(row, "Station_Code", "Station Id"))
+            s_lat = number(row, "Latitude", low=-90, high=90)
+            s_lon = number(row, "Longitude", low=-180, high=180)
+            if code and s_lat is not None and s_lon is not None:
+                coords.setdefault(code, (s_lat, s_lon, text(row, "Station_Name") or code))
+    return coords
+
+
+def nearest_observation(lat: float, lon: float, max_km: float) -> Optional[tuple[dict, Station]]:
+    """Nearest station that actually reports current_wx, within ``max_km``.
+
+    Only ~440 of IMD's ~1,300 city-forecast stations send synoptic observations, so the
+    forecast station and the observing station are often different places.
+    """
+    coords = _station_coords()
+    best: Optional[tuple[dict, Station]] = None
+    for row in iter_dicts(client.fetch("current_weather").rows):
+        code = station_code(text(row, "Station Id", "Station_Id", "StationId"))
+        if not code or code not in coords:
+            continue
+        s_lat, s_lon, name = coords[code]
+        d = haversine_km(lat, lon, s_lat, s_lon)
+        if d <= max_km and (best is None or d < best[1].distance_km):
+            best = (row, Station(code, text(row, "Station") or name, s_lat, s_lon, d, row))
+    return best

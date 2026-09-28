@@ -32,6 +32,19 @@ def test_district_warning_colours_are_inverted_vs_nowcast():
     assert imd_district.nowcast_alert({"color": "4", "Cat12": "12"})["severity"] == "red"
 
 
+def test_city_station_warnings_and_real_nowcast_shape():
+    row = {"Date": "2026-09-28", "Station_Code": "42647", "Station_Name": "Ahmedabad",
+           "Day_1_Warning": "No warning", "Day_1_Warning_Color": "green",
+           "Day_2_Warning": "Heavy Rain", "Day_2_Warning_Color": "orange"}
+    w = imd_district.city_warnings(row)
+    assert [(a["date"], a["severity"], a["event"]) for a in w] == [("2026-09-29", "orange", "Heavy Rain")]
+    now = imd_district.nowcast_alert({"Obj_id": "2", "State_District": "EAST KHASI HILLS", "Date": "2026-09-28",
+                                      "cat1": "0", "cat2": "2", "cat4": "4", "cat16": "", "toi": "1600",
+                                      "vupto": "1900", "color": "2"})
+    assert now["area"] == "EAST KHASI HILLS" and now["valid_until_ist"] == "1900"
+    assert now["hazards"] == ["Light rain", "Light thunderstorm"]
+
+
 def test_district_name_matching_handles_imd_spellings():
     rows = [{"District": "AHMADABAD"}, {"District": "BANAS KANTHA"}]
     assert imd_district.match_district("Ahmedabad", rows)["District"] == "AHMADABAD"

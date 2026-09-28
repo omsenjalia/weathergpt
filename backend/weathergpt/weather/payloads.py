@@ -36,7 +36,8 @@ def current_row(forecast: Forecast) -> Optional[dict]:
     row = forecast.current.to_dict()
     row["kind"] = forecast.current_kind
     if forecast.current_kind == "observation" and forecast.provenance.station:
-        row["station"] = {k: forecast.provenance.station.get(k) for k in ("code", "name", "distance_km")}
+        observing = forecast.provenance.station.get("observation_station") or forecast.provenance.station
+        row["station"] = {k: observing.get(k) for k in ("code", "name", "distance_km")}
     return row
 
 

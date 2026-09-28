@@ -15,9 +15,10 @@ from __future__ import annotations
 
 import base64
 import json
+import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from weathergpt import http
@@ -80,11 +81,83 @@ def jwt_expiry(token: str | None) -> datetime | None:
         return None
 
 
-def _auth_headers() -> dict:
+# --------------------------------------------------------------------------- tokens
+# IMD JWTs last 1 h (``expires_in: 3600``). With IMD_EMAIL + IMD_PASSWORD the backend
+# mints them at POST /api/oauth/token.php and renews them two minutes before expiry,
+# and once more if the gateway rejects one early. A pasted IMD_JWT_TOKEN also works.
+_REFRESH_MARGIN_SECONDS = 120
+_token_lock = threading.Lock()
+_minted: dict[str, Any] = {"token": None, "expires": None, "at": None, "error": None}
+
+
+def mint_token() -> tuple[str, Optional[datetime]]:
+    """Exchange IMD_EMAIL / IMD_PASSWORD for a JWT -> (token, expiry). Raises ``IMDError``."""
     cfg = settings().imd
+    if not cfg.can_mint:
+        raise IMDError("not_configured", "Set IMD_EMAIL and IMD_PASSWORD so the backend can renew IMD tokens")
+    try:
+        reply = http.send("POST", cfg.token_url, body={"email": cfg.email, "password": cfg.password},
+                          headers={"Content-Type": "application/json", "Accept": "application/json",
+                                   "User-Agent": "WeatherGPT/3.0"}, timeout=cfg.timeout_seconds, retries=1)
+    except http.UpstreamError as exc:
+        raise IMDError(exc.reason, f"IMD token endpoint unreachable: {exc}", exc.status, transient=True) from exc
+    try:
+        body: Any = reply.json()
+    except ValueError:
+        body = {}
+    if reply.status >= 400:
+        text = _error_text(body) or f"HTTP {reply.status}"
+        if reply.status in (400, 401):
+            raise IMDError("login_rejected", f"IMD rejected IMD_EMAIL/IMD_PASSWORD: {text}", reply.status)
+        raise classify(reply.status, text)
+    token = body.get("access_token") if isinstance(body, dict) else None
+    if not isinstance(token, str) or not token.strip():
+        raise IMDError("token_response_unrecognised", "IMD token endpoint answered without access_token", reply.status)
+    token = token.strip()
+    expires = jwt_expiry(token)
+    if expires is None and isinstance(body.get("expires_in"), (int, float)):
+        expires = datetime.now(timezone.utc) + timedelta(seconds=float(body["expires_in"]))
+    log_event("INFO", "IMD token renewed", {"expires_at": expires.isoformat() if expires else None})
+    return token, expires
+
+
+def current_token(*, force_refresh: bool = False) -> str:
+    """A usable JWT: minted and renewed when credentials allow, else IMD_JWT_TOKEN."""
+    cfg = settings().imd
+    now = datetime.now(timezone.utc)
+    with _token_lock:
+        token = _minted["token"] or cfg.jwt_token
+        expires = _minted["expires"] if _minted["token"] else jwt_expiry(cfg.jwt_token)
+        fresh = bool(token) and (expires is None or (expires - now).total_seconds() > _REFRESH_MARGIN_SECONDS)
+        if fresh and not force_refresh:
+            return token
+        if cfg.can_mint:
+            try:
+                new_token, new_expires = mint_token()
+            except IMDError as exc:
+                _minted["error"] = exc.to_dict()
+                if token and expires is not None and expires > now and not force_refresh:
+                    return token  # still valid for a moment; renewal will be retried next call
+                raise
+            _minted.update(token=new_token, expires=new_expires, at=now.isoformat(), error=None)
+            return new_token
+    if not token:
+        raise IMDError("not_configured", "IMD_JWT_TOKEN missing")
+    if expires is not None and expires <= now:
+        raise IMDError("token_expired", f"IMD_JWT_TOKEN expired at {expires.isoformat()}; set IMD_EMAIL and "
+                                        "IMD_PASSWORD so the backend renews tokens itself")
+    return token
+
+
+def reset_tokens() -> None:
+    with _token_lock:
+        _minted.update(token=None, expires=None, at=None, error=None)
+
+
+def _auth_headers(token: str) -> dict:
     return {
-        "X-API-Key": cfg.api_key or "",
-        "Authorization": f"Bearer {cfg.jwt_token or ''}",
+        "X-API-KEY": settings().imd.api_key or "",
+        "Authorization": f"Bearer {token}",
         "Accept": "application/json",
         "User-Agent": "WeatherGPT/3.0",
     }
@@ -147,13 +220,6 @@ def fetch(key: str, params: Optional[dict] = None, *, use_cache: bool = True) ->
     if not cfg.configured:
         raise IMDError("not_configured", f"IMD credentials missing: {', '.join(cfg.missing())}")
 
-    expires = jwt_expiry(cfg.jwt_token)
-    if expires is not None and expires <= datetime.now(timezone.utc):
-        # Don't spend a gateway call on a token we can already see has expired.
-        err = IMDError("token_expired", f"IMD_JWT_TOKEN expired at {expires.isoformat()}; generate a new one in the IMD portal")
-        _record_error(key, err.reason, str(err))
-        raise err
-
     clean = {k: str(v) for k, v in (params or {}).items() if v is not None and str(v).strip() != ""}
     path = ep.resolved_path()
     cache_key = f"{path}?{json.dumps(clean, sort_keys=True)}"
@@ -165,13 +231,15 @@ def fetch(key: str, params: Optional[dict] = None, *, use_cache: bool = True) ->
             return IMDResponse(**{**hit.__dict__, "cache_hit": True})
 
     url = f"{cfg.base_url}/{path}"
-    _stats["calls"] += 1
     started = time.perf_counter()
     try:
-        reply = http.send("GET", url, params=clean, headers=_auth_headers(), timeout=cfg.timeout_seconds, retries=1)
-    except http.UpstreamError as exc:
-        _record_error(key, exc.reason, str(exc))
-        raise IMDError(exc.reason, f"IMD unreachable: {exc}", exc.status, transient=True) from exc
+        # An already-expired token is caught here, before a gateway call is spent on it.
+        reply = _get(url, clean, current_token())
+        if reply.status == 401 and cfg.can_mint and "token" in reply.text.lower():
+            reply = _get(url, clean, current_token(force_refresh=True))  # rejected early: renew once
+    except IMDError as err:
+        _record_error(key, err.reason, str(err))
+        raise
 
     body: Any = None
     is_json = "json" in reply.content_type or reply.content.lstrip()[:1] in (b"[", b"{")
@@ -207,6 +275,15 @@ def fetch(key: str, params: Optional[dict] = None, *, use_cache: bool = True) ->
     return resp
 
 
+def _get(url: str, params: dict, token: str) -> "http.Reply":
+    _stats["calls"] += 1
+    try:
+        return http.send("GET", url, params=params, headers=_auth_headers(token),
+                         timeout=settings().imd.timeout_seconds, retries=1)
+    except http.UpstreamError as exc:
+        raise IMDError(exc.reason, f"IMD unreachable: {exc}", exc.status, transient=True) from exc
+
+
 def _record_error(key: str, reason: str, message: str) -> None:
     _stats["errors"] += 1
     _stats["last_error"] = {"endpoint": key, "reason": reason, "message": message[:200],
@@ -216,15 +293,20 @@ def _record_error(key: str, reason: str, message: str) -> None:
 
 def status() -> dict:
     cfg = settings().imd
-    expires = jwt_expiry(cfg.jwt_token)
+    expires = _minted["expires"] if _minted["token"] else jwt_expiry(cfg.jwt_token)
     return {
+        "token_source": "minted" if _minted["token"] else ("env" if cfg.jwt_token else None),
+        "auto_renew": cfg.can_mint,
+        "last_renewal_at": _minted["at"],
+        "last_renewal_error": _minted["error"],
+        "public_proxy": cfg.public_proxy,
         "jwt_expires_at": expires.isoformat() if expires else None,
         "jwt_expired": bool(expires and expires <= datetime.now(timezone.utc)),
         "configured": cfg.configured,
         "enabled": cfg.enabled,
         "missing": cfg.missing(),
         "base_url": cfg.base_url,
-        "auth_scheme": "X-API-Key + Authorization: Bearer <JWT>",
+        "auth_scheme": "X-API-KEY (bound to server IP) + Authorization: Bearer <JWT from POST /api/oauth/token.php>",
         "max_station_km": cfg.max_station_km,
         "calls": _stats["calls"],
         "errors": _stats["errors"],

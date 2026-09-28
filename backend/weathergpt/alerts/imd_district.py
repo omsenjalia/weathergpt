@@ -100,15 +100,40 @@ def nowcast_alert(row: dict) -> Optional[dict]:
             code = int(str(value).strip())
             if code != 1 and code in NOWCAST_CATEGORIES:
                 cats.append(NOWCAST_CATEGORIES[code])
-    toi, upto = text(row, "toi"), text(row, "Vupto", "vupto")
+    toi, upto = text(row, "toi"), text(row, "vupto", "Vupto")
     return {
         "id": f"imd:nowcast:{text(row, 'Obj_id', 'Station')}:{text(row, 'Date')}:{toi}",
         "source": "imd", "issuer": "India Meteorological Department", "official": True,
         "type": "nowcast", "event": ", ".join(cats) or "Nowcast warning", "hazards": cats,
-        "severity": severity, "area": text(row, "District", "Station"),
+        "severity": severity, "area": text(row, "State_District", "District", "Station"),
         "headline": text(row, "message") or ", ".join(cats),
         "date": text(row, "Date"), "issued_ist": toi, "valid_until_ist": upto,
     }
+
+
+CITY_WARNING_COLORS = {"red": "red", "orange": "orange", "yellow": "yellow", "green": "green"}
+
+
+def city_warnings(row: dict) -> list[dict]:
+    """cityforecastwarning row -> per-day station warnings (colour names, e.g. 'green')."""
+    issued = parse_date(text(row, "Date"))
+    station = text(row, "Station_Name")
+    out = []
+    for n in range(1, 8):
+        words = text(row, f"Day_{n}_Warning")
+        color = (text(row, f"Day_{n}_Warning_Color") or "").lower()
+        severity = CITY_WARNING_COLORS.get(color)
+        if not words or severity in (None, "green") or words.strip().lower() == "no warning":
+            continue
+        date = (issued + timedelta(days=n - 1)).isoformat() if issued else None
+        out.append({
+            "id": f"imd:city_warning:{text(row, 'Station_Code')}:{date or n}",
+            "source": "imd", "issuer": "India Meteorological Department", "official": True,
+            "type": "city_warning", "event": words, "hazards": [words], "severity": severity,
+            "day": n, "date": date, "area": station,
+            "headline": f"{severity.title()} warning for {station}: {words}" + (f" on {date}" if date else ""),
+        })
+    return out
 
 
 def alerts_for_district(district_name: Optional[str]) -> tuple[list[dict], Optional[dict]]:

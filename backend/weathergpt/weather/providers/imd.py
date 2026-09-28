@@ -80,7 +80,11 @@ def parse_observation(row: dict, now: datetime, max_age_hours: float) -> tuple[O
     okta = number(row, "Nebulosity", "NEBULOSITY", low=0, high=9)
     code, condition = from_imd_present_weather(int(ww) if ww is not None else None, okta)
     wind_dir = number(row, "Wind Direction", "Wind_Direction", "WIND_DIRECTION", low=0, high=360)
-    wind_kmh = number(row, "Wind Speed", "Wind Speed (KMPH)", "Wind_Speed", "WIND_SPEED", low=0, high=400)
+    wind_kmh = number(row, "Wind Speed KMPH", "Wind Speed", "Wind Speed (KMPH)", "Wind_Speed", "WIND_SPEED", low=0, high=400)
+    message = text(row, "WEATHER_MESSAGE")
+    if message and (ww is None or ww >= 4):
+        # IMD's own words ("Smoke Fog", "Haze", "Light Rain") beat our generic label.
+        condition = message[:1].upper() + message[1:]
     meta = {
         "observed_at_utc": observed_at.isoformat() if observed_at else None,
         "station": text(row, "Station", "Station Name"),
@@ -99,7 +103,8 @@ def parse_observation(row: dict, now: datetime, max_age_hours: float) -> tuple[O
         time_utc=observed_at,
         temperature_c=number(row, "Temperature", "Temperature (deg C)", "CURR_TEMP", low=-60, high=60),
         humidity_percent=number(row, "Humidity", "Humidity (%)", "RH", low=0, high=100),
-        pressure_hpa=number(row, "M.S.L.P", "MSLP", "M.S.L.P (hPa)", low=800, high=1100),
+        feels_like_c=number(row, "Feel Like", "Feels Like", low=-60, high=70),
+        pressure_hpa=number(row, "Mean Sea Level Pressure", "M.S.L.P", "MSLP", "M.S.L.P (hPa)", low=800, high=1100),
         pressure_type="msl",
         wind_speed_kmh=wind_kmh,
         # Direction code 0 means calm: there is no direction to report.
@@ -149,10 +154,17 @@ class IMDProvider(Provider):
 
         current: Optional[HourPoint] = None
         obs_meta: dict = {}
+        obs_station = station
         try:
             obs_row = stations.observation_for(station)
             if obs_row is None:
-                notes.append("no current_wx observation for station")
+                nearest = stations.nearest_observation(lat, lon, cfg.max_station_km)
+                if nearest is not None:
+                    obs_row, obs_station = nearest
+                    notes.append(f"observation from nearest reporting station {obs_station.name} "
+                                 f"({obs_station.distance_km:.0f} km)")
+            if obs_row is None:
+                notes.append("no current_wx observation within range")
             else:
                 current, obs_meta = parse_observation(obs_row, now, cfg.observation_max_age_hours)
                 if current is None:
@@ -183,6 +195,7 @@ class IMDProvider(Provider):
                 freshness_status=freshness, requested_lat=lat, requested_lon=lon,
                 sampled_lat=station.lat, sampled_lon=station.lon, distance_km=round(station.distance_km, 2),
                 spatial_method="nearest_city_station", station={**station.to_dict(), "observation": obs_meta or None,
+                                                                "observation_station": obs_station.to_dict() if current else None,
                                                                 "observed": observed},
                 sources=["imd:cityforecastloc"] + (["imd:current_wx"] if current else []),
                 methods={

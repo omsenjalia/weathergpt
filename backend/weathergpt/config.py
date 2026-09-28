@@ -78,22 +78,33 @@ class IMDSettings:
 
     api_key: Optional[str] = None
     jwt_token: Optional[str] = None
+    # Registered account: the backend mints JWTs itself (they last 1 h) and renews them.
+    email: Optional[str] = None
+    password: Optional[str] = None
     base_url: str = "https://api.imd.gov.in/api/v1"
+    token_url: str = "https://api.imd.gov.in/api/oauth/token.php"
+    # IMD terms prohibit redistributing its data: the raw /v2/imd/{endpoint} passthrough
+    # needs X-Admin-Token unless this is explicitly enabled.
+    public_proxy: bool = False
     timeout_seconds: float = 8.0
     max_station_km: float = 35.0          # nearest city-forecast station must be this close
-    observation_max_age_hours: float = 3.0
+    observation_max_age_hours: float = 4.0   # synoptic reports are 3-hourly and arrive late
     enabled: bool = True
 
     @property
+    def can_mint(self) -> bool:
+        return bool(self.email and self.password)
+
+    @property
     def configured(self) -> bool:
-        return self.enabled and bool(self.api_key and self.jwt_token)
+        return self.enabled and bool(self.api_key and (self.jwt_token or self.can_mint))
 
     def missing(self) -> list[str]:
         out = []
         if not self.api_key:
             out.append("IMD_API_KEY")
-        if not self.jwt_token:
-            out.append("IMD_JWT_TOKEN")
+        if not self.jwt_token and not self.can_mint:
+            out.append("IMD_EMAIL + IMD_PASSWORD (or IMD_JWT_TOKEN)")
         return out
 
 
@@ -280,10 +291,14 @@ def load_settings() -> Settings:
         imd=IMDSettings(
             api_key=env("IMD_API_KEY"),
             jwt_token=env("IMD_JWT_TOKEN"),
+            email=env("IMD_EMAIL"),
+            password=os.getenv("IMD_PASSWORD") or None,
+            token_url=env("IMD_TOKEN_URL") or "https://api.imd.gov.in/api/oauth/token.php",
+            public_proxy=env_bool("IMD_PUBLIC_PROXY", False),
             base_url=(env("IMD_BASE_URL") or "https://api.imd.gov.in/api/v1").rstrip("/"),
             timeout_seconds=env_float("IMD_TIMEOUT_SECONDS", 8.0),
             max_station_km=env_float("IMD_MAX_STATION_KM", 35.0),
-            observation_max_age_hours=env_float("IMD_OBSERVATION_MAX_AGE_HOURS", 3.0),
+            observation_max_age_hours=env_float("IMD_OBSERVATION_MAX_AGE_HOURS", 4.0),
             enabled=env_bool("IMD_ENABLED", True),
         ),
         weathernext=WeatherNextSettings(

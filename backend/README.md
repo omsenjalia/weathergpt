@@ -22,7 +22,7 @@ request ─► provider chain ─────────────► supplem
 
 | Provider | Supplies | Needs |
 |---|---|---|
-| **IMD** | nearest city station (≤ 35 km): observed current conditions + official 7-day forecast; district warnings & nowcast | `IMD_API_KEY` + `IMD_JWT_TOKEN`, egress IP whitelisted by IMD |
+| **IMD** | nearest city station (≤ 35 km): official 7-day forecast + observation from the nearest reporting station; district & station warnings, nowcast | `IMD_API_KEY` (bound to the server IP) + `IMD_EMAIL`/`IMD_PASSWORD` (the backend mints 1-hour JWTs itself) |
 | **WeatherNext** | hourly 64-member ensemble statistics (mean, p10–p90), 15 days | `WEATHERNEXT_ENABLED=1`, BigQuery table + Google credentials |
 | **Open-Meteo** | global baseline; hourly, UV, AQI, sun times; ERA5 archive | nothing |
 
@@ -49,10 +49,13 @@ station nearby) are listed in `fallback_reasons` but don't degrade.
 
 ### IMD endpoints
 
-`GET /v2/imd` lists all 30 (28 APIs + 2 mapping helpers). 22 paths are documented publicly; 8 (agromet, radar,
-lightning, Mausamgram, fishermen, two highway, all-India bulletin) are provisional until confirmed from the IMD
-portal — override with `IMD_ENDPOINT_<KEY>`. After adding credentials, call
-`GET /dev/imd/probe` (header `X-Admin-Token`) to test every endpoint at once.
+`GET /v2/imd` lists the 21 APIs in the IMD account docs (all verified live on 2026-09-28; the cyclone,
+radar, lightning, agromet, highway, fishermen, Mausamgram and all-India bulletin APIs in IMD's public
+reference answer 404 on the gateway). Raw data at `/v2/imd/{endpoint}` needs `X-Admin-Token` because IMD's
+terms prohibit redistribution (`IMD_PUBLIC_PROXY=1` opens it). `GET /dev/imd/probe` tests every endpoint.
+
+Auth: `X-API-KEY` + `Authorization: Bearer <JWT>`; JWTs come from `POST /api/oauth/token.php`
+`{email, password}` → `{access_token, expires_in: 3600}` and are renewed two minutes before expiry.
 
 Note the colour scales: `districtwarning` uses 1 = red … 4 = green, `districtnowcast` uses 1 = green … 4 = red.
 

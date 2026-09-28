@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 
 from weathergpt import geo, http
 from weathergpt.imd import client as imd_client
+from weathergpt.imd import stations as imd_stations
+from weathergpt.imd.parse import iter_dicts
 from weathergpt.alerts import imd_district, sachet
 from weathergpt.config import settings
 from weathergpt.weather.providers.imd import in_india
@@ -30,10 +32,24 @@ def _imd(lat: float, lon: float) -> dict:
         alerts, district = imd_district.alerts_for_district(place["district"])
     except imd_client.IMDError as exc:
         return {"status": "error", "reason": exc.reason, "message": str(exc), "alerts": []}
-    if district is None:
+    alerts = alerts + _city_station_warnings(lat, lon)
+    if district is None and not alerts:
         return {"status": "unknown", "reason": "district_not_in_imd_list", "district_query": place["district"],
                 "alerts": []}
-    return {"status": "ok", "district": {**district, "state": place.get("state")}, "alerts": alerts}
+    return {"status": "ok", "district": {**district, "state": place.get("state")} if district else None,
+            "alerts": alerts}
+
+
+def _city_station_warnings(lat: float, lon: float) -> list[dict]:
+    """Daily warnings IMD attaches to the nearest city-forecast station (cityforecastwarning)."""
+    try:
+        station = imd_stations.nearest_city_station(lat, lon)
+        if station is None or station.distance_km > settings().imd.max_station_km:
+            return []
+        rows = list(iter_dicts(imd_client.fetch("city_forecast_warning", {"id": station.code}).rows))
+    except imd_client.IMDError:
+        return []
+    return [a for row in rows[:1] for a in imd_district.city_warnings(row)]
 
 
 def _sachet(lat: float, lon: float) -> dict:

@@ -14,7 +14,9 @@ from typing import Any, Iterable, Optional
 
 IST = timezone(timedelta(hours=5, minutes=30))
 IST_OFFSET_SECONDS = 19800
-_NULLS = {"", "na", "n/a", "nan", "null", "none", "--", "-", "nil", "nd", "*", "999", "999.0", "-999"}
+_NULLS = {"", "na", "n/a", "nan", "null", "none", "--", "-", "nd", "*", "999", "999.0", "-999"}
+# "NIL" means zero for amounts (IMD writes Past_24_hrs_Rainfall: "NIL") but nothing for text.
+_ZERO_WORDS = {"nil", "trace", "tr"}
 
 
 def norm_key(key: str) -> str:
@@ -42,7 +44,7 @@ def number(row: dict, *names: str, low: Optional[float] = None, high: Optional[f
         return None
     if isinstance(v, str):
         s = v.strip().lower()
-        if s in ("trace", "tr"):
+        if s in _ZERO_WORDS:
             return 0.0
         m = re.search(r"-?\d+(?:\.\d+)?", s)
         if not m:
@@ -61,7 +63,8 @@ def number(row: dict, *names: str, low: Optional[float] = None, high: Optional[f
 
 def text(row: dict, *names: str) -> Optional[str]:
     v = value(row, *names)
-    return str(v).strip() if v is not None and str(v).strip() else None
+    s = str(v).strip() if v is not None else ""
+    return s if s and s.lower() != "nil" else None
 
 
 def parse_date(raw: Any) -> Optional[date]:
@@ -77,11 +80,13 @@ def parse_date(raw: Any) -> Optional[date]:
 
 
 def parse_hhmm(raw: Any) -> Optional[tuple[int, int]]:
-    """'06:12', '0612', '6:12 AM', '18:31' -> (hour, minute)."""
+    """'06:12', '0612', '6:12 AM', '18:31', '12:15:00', or an hour alone ('12') -> (hour, minute)."""
     if raw is None:
         return None
     s = str(raw).strip().upper()
-    m = re.match(r"^(\d{1,2})[:.]?(\d{2})\s*(AM|PM)?", s)
+    if re.fullmatch(r"\d{1,2}", s):
+        return (int(s), 0) if int(s) <= 23 else None
+    m = re.match(r"^(\d{1,2})[:.]?(\d{2})(?::\d{2})?\s*(AM|PM)?", s)
     if not m:
         return None
     h, mi = int(m.group(1)), int(m.group(2))

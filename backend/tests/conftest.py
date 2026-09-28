@@ -49,7 +49,7 @@ def imd_city_rows() -> list[dict]:
     today = datetime.now(IST).date()
     return [
         {"Date": today.isoformat(), "Station_Code": "42647", "Station_Name": "Ahmedabad", "Latitude": "23.07",
-         "Longitude": "72.63", "Today_Max_temp": "33.4", "Today_Min_temp": "24.9", "Past_24_hrs_Rainfall": "Trace",
+         "Longitude": "72.63", "Today_Max_temp": "33.4", "Today_Min_temp": "24.9", "Past_24_hrs_Rainfall": "NIL",
          "Relative_Humidity_at_0830": "78", "Relative_Humidity_at_1730": "52", "Sunrise_time": "06:25",
          "Sunset_time": "18:20", "Todays_Forecast_Max_Temp": "34", "Todays_Forecast_Min_temp": "25",
          "Todays_Forecast": "Partly cloudy sky with possibility of rain or Thunderstorm",
@@ -57,6 +57,9 @@ def imd_city_rows() -> list[dict]:
          "Day_3_Max_Temp": "NA", "Day_3_Min_temp": "24", "Day_3_Forecast": "Generally cloudy sky with light rain",
          **{f"Day_{n}_{k}": v for n in range(4, 8) for k, v in (("Max_Temp", "33"), ("Min_temp", "24"),
                                                               ("Forecast", "Mainly Clear sky"))}},
+        {"Date": today.isoformat(), "Station_Code": "99001", "Station_Name": "Mumbai City (forecast only)",
+         "Latitude": "18.97", "Longitude": "72.82", "Todays_Forecast_Max_Temp": "31", "Todays_Forecast_Min_temp": "25",
+         "Todays_Forecast": "Generally cloudy sky with Light rain"},
         {"Date": today.isoformat(), "Station_Code": "42182", "Station_Name": "New Delhi (Safdarjung)",
          "Latitude": "28.58", "Longitude": "77.20", "Todays_Forecast_Max_Temp": "36", "Todays_Forecast_Min_temp": "26",
          "Todays_Forecast": "Haze"},
@@ -64,11 +67,16 @@ def imd_city_rows() -> list[dict]:
 
 
 def imd_current_rows() -> list[dict]:
+    """Shape observed on the live gateway (2026-09-28): hour-only UTC Time, spelled-out MSLP."""
     obs = datetime.now(timezone.utc) - timedelta(minutes=40)
-    return [{"Station Id": "42647", "Station": "Ahmedabad", "Date of Observation": obs.date().isoformat(),
-             "Time of Observation": obs.strftime("%H:%M"), "M.S.L.P": "1005.2", "Wind Direction": "270",
-             "Wind Speed": "11", "Temperature": "32.8", "Weather Code": "05", "Nebulosity": "4",
-             "Humidity": "55", "Last 24 hrs Rainfall": "0.0"}]
+    day = obs.date().isoformat()
+    return [{"Station Id": "42647", "Station": "Ahmedabad", "Date of Observation": day, "Time": str(obs.hour),
+             "Mean Sea Level Pressure": "1005.2", "Wind Direction": "270", "Wind Speed KMPH": "11",
+             "Temperature": "32.8", "Weather Code": "5", "Nebulosity": "4", "Humidity": "55",
+             "Last 24 hrs Rainfall": "0", "Feel Like": "35.1", "WEATHER_MESSAGE": "Haze"},
+            {"Station Id": "43003", "Station": "Mumbai-Santacruz", "Date of Observation": day, "Time": str(obs.hour),
+             "Mean Sea Level Pressure": "1008", "Wind Direction": 0, "Wind Speed KMPH": 0, "Temperature": "30",
+             "Weather Code": "2", "Nebulosity": "6", "Humidity": "70"}]
 
 
 def district_warning_rows() -> list[dict]:
@@ -93,6 +101,14 @@ def sachet_rows() -> list[dict]:
     ]
 
 
+def make_token(seconds_from_now: float, n: int = 0) -> str:
+    """IMD-style token: base64 JSON payload {uid, exp} + '.' + signature."""
+    import base64
+    import time
+    payload = json.dumps({"uid": 4184, "exp": int(time.time() + seconds_from_now)}).encode()
+    return base64.urlsafe_b64encode(payload).decode().rstrip("=") + f".sig{n:04d}abcdef0123456789"
+
+
 class FakeUpstreams:
     """Routes requests by URL fragment; records every call."""
 
@@ -100,12 +116,18 @@ class FakeUpstreams:
         self.calls: list[tuple[str, dict, dict]] = []
         self.open_meteo = open_meteo_payload()
         self.imd_rows = {"cityforecastloc": imd_city_rows(), "current_wx": imd_current_rows(),
+                         "cityforecast_mapping": [{"Station_Code": "43003", "Station_Name": "Mumbai-Santacruz",
+                                                   "Latitude": "19.1", "Longitude": "72.85"}],
+                         "cityforecastwarning": [],
                          "districtwarning": district_warning_rows(), "districtnowcast": []}
         self.imd_status: int = 200
         self.imd_error: str = ""
         self.sachet = sachet_rows()
         self.polygon = "<alert><polygon>22.8,72.3 23.3,72.3 23.3,72.9 22.8,72.9 22.8,72.3</polygon></alert>"
         self.fail: set[str] = set()
+        self.token_status: int = 200
+        self.issued_tokens: list[str] = []
+        self.reject_tokens: set[str] = set()
 
     def __call__(self, method, url, params, headers, body, timeout):
         self.calls.append((url, dict(params), dict(headers)))
@@ -138,15 +160,26 @@ class FakeUpstreams:
             if str(params.get("identifier")) == "111":
                 return http.Reply(200, {"content-type": "application/xml"}, self.polygon.encode())
             return http.Reply(200, {"content-type": "application/xml"}, b"<alert></alert>")
+        if "api.imd.gov.in/api/oauth/token.php" in url:
+            if self.token_status != 200 or body.get("password") != "pw":
+                return self._json({"error": "Invalid credentials"}, 401)
+            token = make_token(3600, n=len(self.issued_tokens))
+            self.issued_tokens.append(token)
+            return self._json({"access_token": token, "token_type": "Bearer", "expires_in": 3600})
         if "api.imd.gov.in" in url:
+            h = {k.lower(): v for k, v in headers.items()}
             if self.imd_status != 200:
                 return self._json({"error": self.imd_error}, self.imd_status)
-            if not headers.get("X-API-Key") or not headers.get("Authorization", "").startswith("Bearer "):
+            if not h.get("x-api-key") or not h.get("authorization", "").startswith("Bearer "):
                 return self._json({"error": "API key missing"}, 401)
+            if h["authorization"][7:] in self.reject_tokens:
+                return self._json({"error": "Invalid or expired JWT token"}, 401)
             path = url.rsplit("/", 1)[-1]
             rows = self.imd_rows.get(path, [])
             if params.get("id") and path == "current_wx":
                 rows = [r for r in rows if r.get("Station Id") == params["id"]]
+                if not rows:  # the live gateway answers 400 for stations that do not observe
+                    return self._json({"error": "Invalid ID or No Data Available"}, 400)
             return self._json(rows)
         return self._json({"error": f"unmocked {url}"}, 404)
 
@@ -164,6 +197,7 @@ def isolated(monkeypatch):
     from weathergpt.runtime import clear_all_caches
     from weathergpt.weather.service import reset_service
     from weathergpt import geo
+    from weathergpt.imd import client as imd_client
 
     for key in CLEAR_ENV:
         monkeypatch.delenv(key, raising=False)
@@ -171,6 +205,7 @@ def isolated(monkeypatch):
     reset_settings()
     clear_all_caches()
     reset_service()
+    imd_client.reset_tokens()
     yield
     http.set_transport(None)
     reset_settings()
@@ -189,8 +224,14 @@ def upstreams() -> FakeUpstreams:
 def imd_keys(monkeypatch):
     from weathergpt.config import reset_settings
     monkeypatch.setenv("IMD_API_KEY", "test-key")
-    monkeypatch.setenv("IMD_JWT_TOKEN", "test.jwt.token")
+    monkeypatch.setenv("IMD_JWT_TOKEN", make_token(3600))
     reset_settings()
+
+
+@pytest.fixture
+def admin(monkeypatch) -> dict:
+    monkeypatch.setenv("ADMIN_TOKEN", "admin-secret")
+    return {"X-Admin-Token": "admin-secret"}
 
 
 @pytest.fixture
