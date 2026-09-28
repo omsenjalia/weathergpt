@@ -13,6 +13,7 @@ Responses are either a JSON array of rows or an envelope
 
 from __future__ import annotations
 
+import base64
 import json
 import time
 from dataclasses import dataclass, field
@@ -65,6 +66,18 @@ class IMDResponse:
         if self.envelope:
             out["envelope"] = {k: v for k, v in self.envelope.items() if k != "data"}
         return out
+
+
+def jwt_expiry(token: str | None) -> datetime | None:
+    """Expiry from an IMD token (first segment is base64 JSON, e.g. {"uid":..,"exp":..})."""
+    if not token:
+        return None
+    try:
+        head = token.split(".")[0]
+        payload = json.loads(base64.urlsafe_b64decode(head + "=" * (-len(head) % 4)))
+        return datetime.fromtimestamp(float(payload["exp"]), timezone.utc)
+    except (ValueError, KeyError, TypeError):
+        return None
 
 
 def _auth_headers() -> dict:
@@ -134,6 +147,13 @@ def fetch(key: str, params: Optional[dict] = None, *, use_cache: bool = True) ->
     if not cfg.configured:
         raise IMDError("not_configured", f"IMD credentials missing: {', '.join(cfg.missing())}")
 
+    expires = jwt_expiry(cfg.jwt_token)
+    if expires is not None and expires <= datetime.now(timezone.utc):
+        # Don't spend a gateway call on a token we can already see has expired.
+        err = IMDError("token_expired", f"IMD_JWT_TOKEN expired at {expires.isoformat()}; generate a new one in the IMD portal")
+        _record_error(key, err.reason, str(err))
+        raise err
+
     clean = {k: str(v) for k, v in (params or {}).items() if v is not None and str(v).strip() != ""}
     path = ep.resolved_path()
     cache_key = f"{path}?{json.dumps(clean, sort_keys=True)}"
@@ -196,7 +216,10 @@ def _record_error(key: str, reason: str, message: str) -> None:
 
 def status() -> dict:
     cfg = settings().imd
+    expires = jwt_expiry(cfg.jwt_token)
     return {
+        "jwt_expires_at": expires.isoformat() if expires else None,
+        "jwt_expired": bool(expires and expires <= datetime.now(timezone.utc)),
         "configured": cfg.configured,
         "enabled": cfg.enabled,
         "missing": cfg.missing(),

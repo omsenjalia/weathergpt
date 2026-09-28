@@ -127,3 +127,35 @@ def test_proxy_without_credentials_is_503(client, upstreams):
     r = client.get("/v2/imd/cyclone_track")
     assert r.status_code == 503
     assert r.json()["detail"]["code"] == "imd_not_configured"
+
+
+def _token(exp: float) -> str:
+    import base64, json
+    head = base64.urlsafe_b64encode(json.dumps({"uid": 1, "exp": exp}).encode()).decode().rstrip("=")
+    return f"{head}.signature"
+
+
+def test_expired_jwt_fails_fast_without_a_request(upstreams, monkeypatch):
+    import time
+    from weathergpt.config import reset_settings
+    monkeypatch.setenv("IMD_API_KEY", "k")
+    monkeypatch.setenv("IMD_JWT_TOKEN", _token(time.time() - 60))
+    reset_settings()
+    with pytest.raises(imd_client.IMDError) as exc:
+        imd_client.fetch("cyclone_track")
+    assert exc.value.reason == "token_expired"
+    assert upstreams.urls("api.imd.gov.in") == []
+    assert imd_client.status()["jwt_expired"] is True
+    sel = service().select(23.03, 72.58)
+    assert sel.selected_source == "open_meteo" and sel.fallback_reasons[0]["reason"] == "token_expired"
+    assert sel.degraded is True
+
+
+def test_valid_jwt_expiry_is_reported(upstreams, monkeypatch):
+    import time
+    from weathergpt.config import reset_settings
+    monkeypatch.setenv("IMD_API_KEY", "k")
+    monkeypatch.setenv("IMD_JWT_TOKEN", _token(time.time() + 3600))
+    reset_settings()
+    assert imd_client.status()["jwt_expired"] is False and imd_client.status()["jwt_expires_at"]
+    assert imd_client.fetch("current_weather").rows
