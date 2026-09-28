@@ -16,6 +16,7 @@ from weathergpt.runtime import make_cache
 
 GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
 REVERSE_URL = "https://nominatim.openstreetmap.org/reverse"
+SEARCH_URL = "https://nominatim.openstreetmap.org/search"
 
 _forward = make_cache("geocode", 512)
 _reverse = make_cache("reverse_geocode", 1024)
@@ -38,8 +39,10 @@ def geocode(name: str, *, country_bias: str = "IN") -> Optional[dict]:
         return None
     results = (data or {}).get("results") or []
     if not results:
-        _forward.set(key, {}, 3600)
-        return None
+        # Open-Meteo only indexes Latin names; Indic-script names ("दिल्ली") go to Nominatim.
+        out = _nominatim_search(query) if not query.isascii() else None
+        _forward.set(key, out or {}, 86400 if out else 3600)
+        return out
     best = next((r for r in results if r.get("country_code") == country_bias), results[0])
     out = {
         "name": best.get("name") or query,
@@ -55,18 +58,44 @@ def geocode(name: str, *, country_bias: str = "IN") -> Optional[dict]:
     return out
 
 
-def reverse(lat: float, lon: float) -> Optional[dict]:
-    """District/state for a point (Nominatim zoom 10). None when unavailable."""
+def _throttle() -> None:
+    """Nominatim allows 1 request/s; serialise calls from this instance."""
     global _last_reverse
-    key = f"{round(lat / 0.05) * 0.05:.2f}:{round(lon / 0.05) * 0.05:.2f}"
-    hit = _reverse.get(key)
-    if hit is not None:
-        return hit or None
-    with _reverse_lock:  # respect Nominatim's 1 req/s policy per instance
+    with _reverse_lock:
         wait = 1.0 - (time.time() - _last_reverse)
         if wait > 0:
             time.sleep(wait)
         _last_reverse = time.time()
+
+
+def _nominatim_search(query: str) -> Optional[dict]:
+    _throttle()
+    try:
+        data = http.get_json(SEARCH_URL, {"q": query, "format": "jsonv2", "limit": 1, "countrycodes": "in",
+                                          "accept-language": "en", "addressdetails": 1},
+                             headers={"User-Agent": settings().nominatim_user_agent}, timeout=6.0, retries=0)
+    except http.UpstreamError:
+        return None
+    if not isinstance(data, list) or not data:
+        return None
+    hit = data[0]
+    addr = hit.get("address") or {}
+    try:
+        lat, lon = float(hit["lat"]), float(hit["lon"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return {"name": hit.get("name") or query, "lat": lat, "lon": lon, "admin1": addr.get("state"),
+            "admin2": addr.get("state_district"), "country": addr.get("country"), "country_code": "IN",
+            "timezone": None}
+
+
+def reverse(lat: float, lon: float) -> Optional[dict]:
+    """District/state for a point (Nominatim zoom 10). None when unavailable."""
+    key = f"{round(lat / 0.05) * 0.05:.2f}:{round(lon / 0.05) * 0.05:.2f}"
+    hit = _reverse.get(key)
+    if hit is not None:
+        return hit or None
+    _throttle()
     try:
         data = http.get_json(REVERSE_URL, {"lat": f"{lat:.5f}", "lon": f"{lon:.5f}", "format": "jsonv2",
                                            "zoom": 10, "accept-language": "en", "addressdetails": 1},

@@ -40,11 +40,12 @@ def precip_next_24h(forecast: Forecast, now: Optional[datetime] = None, window_h
     if not forecast.hourly:
         return None
     now = now or datetime.now(timezone.utc)
-    start = now.replace(minute=0, second=0, microsecond=0)
-    end = start + timedelta(hours=window_hours)
+    # The bucket still running at ``now`` plus the next ones: exactly ``window_hours`` buckets.
+    buckets = sorted((p for p in forecast.hourly if p.time_utc + timedelta(hours=1) > now), key=lambda p: p.time_utc)
+    buckets = [p for p in buckets if p.time_utc < buckets[0].time_utc + timedelta(hours=window_hours)] if buckets else []
     total, times = 0.0, []
-    for p in forecast.hourly:
-        if p.time_utc < start or p.time_utc >= end or p.precipitation_mm is None:
+    for p in buckets:
+        if p.precipitation_mm is None:
             continue
         total += max(0.0, p.precipitation_mm)
         times.append(p.time_utc)

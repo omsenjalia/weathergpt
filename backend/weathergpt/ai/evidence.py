@@ -101,8 +101,8 @@ def _source_line(ev: Evidence) -> str:
 
 def _next_rain(fc: Forecast, hours: int = 24) -> tuple[Optional[float], Optional[datetime], Optional[float]]:
     """(max chance next N h, first hour >= 50%, total mm next N h)."""
-    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
-    window = [p for p in fc.hourly if now <= p.time_utc < now + timedelta(hours=hours)]
+    now = datetime.now(timezone.utc)
+    window = [p for p in fc.hourly if p.time_utc + timedelta(hours=1) > now and p.time_utc < now + timedelta(hours=hours)]
     chances = [p.precipitation_probability for p in window if p.precipitation_probability is not None]
     first = next((p.time_utc for p in window if (p.precipitation_probability or 0) >= 50), None)
     amounts = [p.precipitation_mm for p in window if p.precipitation_mm is not None]

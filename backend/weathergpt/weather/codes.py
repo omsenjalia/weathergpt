@@ -148,8 +148,8 @@ _TEXT_RULES: list[tuple[re.Pattern, int, str]] = [(re.compile(p, re.I), c, l) fo
     (r"rain", 61, "Rain"),
     (r"dense fog|fog", 45, "Fog"),
     (r"mist|haze|smog|dust", 45, "Haze"),
-    (r"overcast|generally cloudy|cloudy sky", 3, "Cloudy"),
     (r"partly cloudy", 2, "Partly cloudy"),
+    (r"overcast|generally cloudy|cloudy sky", 3, "Cloudy"),
     (r"mainly clear", 1, "Mainly clear"),
     (r"clear sky|clear", 0, "Clear sky"),
 ]]

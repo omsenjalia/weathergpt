@@ -10,7 +10,7 @@ Null semantics: absent data is ``null`` — never 0 (``weather_code`` 0 is "clea
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from weathergpt.weather.models import SCHEMA_VERSION, SELECTION_POLICY_VERSION, Forecast, HourPoint
@@ -41,9 +41,13 @@ def current_row(forecast: Forecast) -> Optional[dict]:
 
 
 def upcoming_hours(forecast: Forecast, limit: int, now: Optional[datetime] = None) -> list[HourPoint]:
+    """Hours from the bucket that contains ``now`` onward.
+
+    Buckets are location-local hours, which in India start at :30 UTC — so the
+    cutoff is "bucket ends after now", not the UTC hour floor.
+    """
     now = now or datetime.now(timezone.utc)
-    cutoff = now.replace(minute=0, second=0, microsecond=0)
-    upcoming = [p for p in forecast.hourly if p.time_utc >= cutoff]
+    upcoming = [p for p in forecast.hourly if p.time_utc + timedelta(hours=1) > now]
     return upcoming[:limit]
 
 
