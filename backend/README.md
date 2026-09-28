@@ -9,7 +9,7 @@ uvicorn main:app --reload --port 8888
 python -m pytest            # offline: every upstream is faked
 ```
 
-Vercel: project root `backend/`, entry `api/index.py` (all paths rewritten to it by `vercel.json`).
+Vercel: project root `backend/`, entry `api/index.py` (`vercel.json` only sets `maxDuration`; do not add a catch-all rewrite, it makes every route 404).
 
 ## Data flow
 
