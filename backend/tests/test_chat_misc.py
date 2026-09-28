@@ -165,3 +165,20 @@ def test_vercel_entrypoint():
     assert app.title == "WeatherGPT API"
     cfg = json.loads((Path(__file__).parents[1] / "vercel.json").read_text())
     assert cfg["rewrites"][0]["destination"] == "/api/index"
+
+
+def test_float_wav_chunks_are_joined():
+    """Bhashini returns IEEE-float WAVs (format tag 3), which the wave module rejects."""
+    import struct
+    from weathergpt.speech import bhashini
+
+    def float_wav(samples: int) -> bytes:
+        fmt = struct.pack("<HHIIHH", 3, 1, 22050, 22050 * 4, 4, 32)
+        frames = struct.pack(f"<{samples}f", *([0.25] * samples))
+        return (b"RIFF" + struct.pack("<I", 4 + 8 + len(fmt) + 8 + len(frames)) + b"WAVE"
+                + b"fmt " + struct.pack("<I", len(fmt)) + fmt + b"data" + struct.pack("<I", len(frames)) + frames)
+
+    joined, rate = bhashini.concat_wavs([float_wav(10), float_wav(5)])
+    assert rate == 22050
+    fmt, frames = bhashini._parse_wav(joined)
+    assert struct.unpack("<H", fmt[:2])[0] == 3 and len(frames) == 15 * 4

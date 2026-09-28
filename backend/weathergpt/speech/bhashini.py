@@ -17,11 +17,10 @@ one config call per language, not one per utterance.
 from __future__ import annotations
 
 import base64
-import io
 import re
+import struct
 import threading
 import time
-import wave
 from dataclasses import dataclass
 
 from weathergpt import http
@@ -185,25 +184,55 @@ def split_for_tts(text: str, limit: int = TTS_CHUNK_CHARS) -> list[str]:
     return chunks
 
 
+def _parse_wav(data: bytes) -> tuple[bytes, bytes]:
+    """Returns (fmt chunk body, sample data) from a RIFF/WAVE file.
+
+    Parsed by hand rather than with `wave`, which rejects the IEEE-float
+    (format tag 3) WAVs Bhashini TTS returns.
+    """
+    if len(data) < 12 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
+        raise ValueError("not a RIFF/WAVE file")
+    fmt = None
+    pos = 12
+    while pos + 8 <= len(data):
+        chunk_id = data[pos:pos + 4]
+        size = struct.unpack("<I", data[pos + 4:pos + 8])[0]
+        body = data[pos + 8:pos + 8 + size]
+        if chunk_id == b"fmt ":
+            fmt = body
+        elif chunk_id == b"data":
+            if fmt is None or len(fmt) < 16:
+                raise ValueError("WAV data chunk before a valid fmt chunk")
+            return fmt, body
+        pos += 8 + size + (size & 1)
+    raise ValueError("WAV has no fmt/data chunks")
+
+
+def _build_wav(fmt: bytes, frames: bytes) -> bytes:
+    # A fmt body longer than 16 bytes (e.g. WAVE_FORMAT_EXTENSIBLE) is kept as-is.
+    fmt_chunk = b"fmt " + struct.pack("<I", len(fmt)) + fmt + (b"\0" if len(fmt) & 1 else b"")
+    data_chunk = b"data" + struct.pack("<I", len(frames)) + frames + (b"\0" if len(frames) & 1 else b"")
+    return b"RIFF" + struct.pack("<I", 4 + len(fmt_chunk) + len(data_chunk)) + b"WAVE" + fmt_chunk + data_chunk
+
+
 def concat_wavs(parts: list[bytes]) -> tuple[bytes, int]:
     """Joins WAV byte strings that share one format; returns (wav bytes, sample rate)."""
-    out = io.BytesIO()
-    params = None
-    with wave.open(out, "wb") as writer:
-        for part in parts:
-            with wave.open(io.BytesIO(part), "rb") as reader:
-                p = reader.getparams()
-                if params is None:
-                    params = p
-                    writer.setnchannels(p.nchannels)
-                    writer.setsampwidth(p.sampwidth)
-                    writer.setframerate(p.framerate)
-                elif (p.nchannels, p.sampwidth, p.framerate) != (params.nchannels, params.sampwidth, params.framerate):
-                    raise SpeechUpstreamError("Bhashini returned audio chunks in different formats")
-                writer.writeframes(reader.readframes(reader.getnframes()))
-    if params is None:
+    fmt = None
+    frames: list[bytes] = []
+    for part in parts:
+        try:
+            part_fmt, part_frames = _parse_wav(part)
+        except ValueError as exc:
+            raise SpeechUpstreamError("Bhashini returned malformed audio") from exc
+        # format tag, channels, sample rate, byte rate, block align, bits per sample
+        if fmt is None:
+            fmt = part_fmt
+        elif part_fmt[:16] != fmt[:16]:
+            raise SpeechUpstreamError("Bhashini returned audio chunks in different formats")
+        frames.append(part_frames)
+    if fmt is None:
         raise SpeechUpstreamError("Bhashini returned no audio")
-    return out.getvalue(), params.framerate
+    return _build_wav(fmt, b"".join(frames)), struct.unpack("<I", fmt[4:8])[0]
 
 
 def synthesize(text: str, language: str, gender: str = "female") -> dict:
@@ -245,10 +274,10 @@ def synthesize(text: str, language: str, gender: str = "female") -> dict:
 
 def _wav_rate(data: bytes) -> int | None:
     try:
-        with wave.open(io.BytesIO(data), "rb") as reader:
-            return reader.getframerate()
-    except (wave.Error, EOFError):
+        fmt, _ = _parse_wav(data)
+    except ValueError:
         return None
+    return struct.unpack("<I", fmt[4:8])[0]
 
 
 # ---------------------------------------------------------------------------
