@@ -74,6 +74,10 @@ class IMDSettings:
     ``Authorization: Bearer <JWT>`` (verified against the live gateway: a key
     alone returns ``Authorization header missing or invalid``). Access is also
     IP-whitelisted by IMD, so the deployment's egress IP must be registered.
+
+    Relay mode (``IMD_RELAY_TOKEN`` set): ``IMD_BASE_URL`` points at a relay on a host
+    with a fixed, whitelisted IP (``relay/imd_relay.py``). The relay holds the key and
+    account and mints JWTs itself; the backend sends only the shared secret.
     """
 
     api_key: Optional[str] = None
@@ -81,6 +85,7 @@ class IMDSettings:
     # Registered account: the backend mints JWTs itself (they last 1 h) and renews them.
     email: Optional[str] = None
     password: Optional[str] = None
+    relay_token: Optional[str] = None
     base_url: str = "https://api.imd.gov.in/api/v1"
     token_url: str = "https://api.imd.gov.in/api/oauth/token.php"
     # IMD terms prohibit redistributing its data: the raw /v2/imd/{endpoint} passthrough
@@ -92,15 +97,21 @@ class IMDSettings:
     enabled: bool = True
 
     @property
+    def relay(self) -> bool:
+        return bool(self.relay_token)
+
+    @property
     def can_mint(self) -> bool:
-        return bool(self.email and self.password)
+        return not self.relay and bool(self.email and self.password)
 
     @property
     def configured(self) -> bool:
-        return self.enabled and bool(self.api_key and (self.jwt_token or self.can_mint))
+        return self.enabled and (self.relay or bool(self.api_key and (self.jwt_token or self.can_mint)))
 
     def missing(self) -> list[str]:
         out = []
+        if self.relay:
+            return out
         if not self.api_key:
             out.append("IMD_API_KEY")
         if not self.jwt_token and not self.can_mint:
@@ -293,6 +304,7 @@ def load_settings() -> Settings:
             jwt_token=env("IMD_JWT_TOKEN"),
             email=env("IMD_EMAIL"),
             password=os.getenv("IMD_PASSWORD") or None,
+            relay_token=os.getenv("IMD_RELAY_TOKEN") or None,
             token_url=env("IMD_TOKEN_URL") or "https://api.imd.gov.in/api/oauth/token.php",
             public_proxy=env_bool("IMD_PUBLIC_PROXY", False),
             base_url=(env("IMD_BASE_URL") or "https://api.imd.gov.in/api/v1").rstrip("/"),
