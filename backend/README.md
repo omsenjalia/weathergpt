@@ -47,6 +47,16 @@ station nearby) are listed in `fallback_reasons` but don't degrade.
 | `GET /health` · `GET /dev` · `POST /dev/sandbox` · `GET /dev/intent` · `GET /dev/forecast` | web Dev Suite |
 | `GET /dev/imd/probe` · `POST /dev/reset` | operators (`X-Admin-Token`) |
 
+### Client secret
+
+When `BACKEND_SECRET` is set, every request must send the same value in `X-Backend-Secret`; anything else gets
+401 `{"detail": {"code": "backend_secret_mismatch"}}`. Only `GET /` and `GET /health` (uptime probes) and CORS
+preflights are exempt; admin routes need both headers. Unset = no check (local development). The apps read it at
+build time from `EXPO_PUBLIC_BACKEND_SECRET` (CI: the `BACKEND_SECRET` repository secret). Roll out in this order:
+ship app builds that send the secret, then set it on the server — older installs stop connecting at that point.
+A value compiled into an app can be extracted from the APK, so this keeps out casual and scripted use, not a
+determined attacker; rotate it by releasing new builds and then changing the server value.
+
 ### IMD endpoints
 
 `GET /v2/imd` lists the 21 APIs in the IMD account docs (all verified live on 2026-09-28; the cyclone,

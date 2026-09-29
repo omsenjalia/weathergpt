@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import time
 import uuid
 
@@ -15,6 +16,9 @@ from weathergpt.config import settings
 from weathergpt.runtime import log_event
 
 QUIET_PATHS = {"/health", "/health/", "/dev", "/dev/", "/v2/speech/health"}
+# Reachable without the backend secret: they reveal nothing and keep uptime probes working.
+OPEN_PATHS = {"/", "/health", "/health/"}
+SECRET_HEADER = "x-backend-secret"
 
 DESCRIPTION = """Shared backend for **weathergpt** (web), **weathergpt-app** and **weathergpt-android**.
 
@@ -28,6 +32,21 @@ def create_app() -> FastAPI:
     app = FastAPI(title="WeatherGPT API", version=__version__, description=DESCRIPTION)
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"],
                        allow_headers=["*"], expose_headers=["X-Request-ID"])
+
+    @app.middleware("http")
+    async def require_backend_secret(request: Request, call_next):
+        """Clients connect only when they send the same BACKEND_SECRET the server has.
+
+        Unset on the server = no check. CORS preflights pass (browsers never attach
+        custom headers to them); the real request that follows is still checked.
+        """
+        expected = settings().backend_secret
+        if (not expected or request.method == "OPTIONS" or request.url.path in OPEN_PATHS
+                or hmac.compare_digest((request.headers.get(SECRET_HEADER) or "").encode(), expected.encode())):
+            return await call_next(request)
+        return JSONResponse(status_code=401, headers={"Access-Control-Allow-Origin": "*"},
+                            content={"detail": {"code": "backend_secret_mismatch",
+                                                "message": "This client is not authorised for this backend"}})
 
     @app.middleware("http")
     async def request_log(request: Request, call_next):
