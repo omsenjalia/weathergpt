@@ -185,3 +185,71 @@ def test_float_wav_chunks_are_joined():
     assert rate == 22050
     fmt, frames = bhashini._parse_wav(joined)
     assert struct.unpack("<H", fmt[:2])[0] == 3 and len(frames) == 15 * 4
+
+
+def _float_wav(values: list[float], rate: int = 22050) -> bytes:
+    import struct
+    fmt = struct.pack("<HHIIHH", 3, 1, rate, rate * 4, 4, 32)
+    frames = struct.pack(f"<{len(values)}f", *values)
+    return (b"RIFF" + struct.pack("<I", 4 + 8 + len(fmt) + 8 + len(frames)) + b"WAVE"
+            + b"fmt " + struct.pack("<I", len(fmt)) + fmt + b"data" + struct.pack("<I", len(frames)) + frames)
+
+
+def test_float_tts_audio_is_sent_as_16_bit_pcm():
+    import struct
+    from weathergpt.speech import bhashini
+
+    pcm = bhashini.to_pcm16(_float_wav([0.0, 0.5, -0.5, 1.0, -1.0, 2.0]))
+    with wave.open(io.BytesIO(pcm)) as w:  # the stdlib reader accepts it: plain PCM
+        assert (w.getsampwidth(), w.getframerate(), w.getnchannels()) == (2, 22050, 1)
+        samples = struct.unpack("<6h", w.readframes(6))
+    assert samples == (0, 16383, -16383, 32767, -32767, 32767)  # out-of-range floats are clipped
+    already_pcm = pcm
+    assert bhashini.to_pcm16(already_pcm) == already_pcm
+
+
+def test_tts_chunks_run_in_parallel_keep_order_and_are_cached(client, monkeypatch):
+    import json
+    import threading
+    import time
+    from weathergpt import http
+    from weathergpt.config import reset_settings
+    from weathergpt.speech import bhashini
+
+    monkeypatch.setenv("BHASHINI_USER_ID", "u")
+    monkeypatch.setenv("BHASHINI_ULCA_API_KEY", "k")
+    reset_settings()
+    bhashini.clear_cache()
+    calls = {"infer": 0, "in_flight": 0, "peak": 0}
+    lock = threading.Lock()
+
+    def transport(method, url, params, headers, body, timeout):
+        if "getModelsPipeline" in url:
+            data = {"pipelineResponseConfig": [{"taskType": "tts", "config": [{"language": {"sourceLanguage": "en"},
+                                                                                "serviceId": "svc"}]}],
+                    "pipelineInferenceAPIEndPoint": {"callbackUrl": "https://dhruva/infer",
+                                                     "inferenceApiKey": {"name": "Authorization", "value": "x"}}}
+        else:
+            text = body["inputData"]["input"][0]["source"]
+            with lock:
+                calls["infer"] += 1
+                calls["in_flight"] += 1
+                calls["peak"] = max(calls["peak"], calls["in_flight"])
+            time.sleep(0.05)
+            with lock:
+                calls["in_flight"] -= 1
+            marker = int(text.split()[0][1:]) / 100.0  # "#12 ..." -> 0.12: identifies the chunk in the audio
+            data = {"pipelineResponse": [{"audio": [{"audioContent": base64.b64encode(_float_wav([marker])).decode()}]}]}
+        return http.Reply(200, {"content-type": "application/json"}, json.dumps(data).encode())
+
+    http.set_transport(transport)
+    text = " ".join(f"#{i} " + "word " * 60 + "end." for i in range(1, 5))
+    first = client.post("/v2/speech/tts", json={"text": text, "language": "en"}).json()
+    assert first["chunks"] == 4 and first["cached"] is False and calls["peak"] > 1
+    with wave.open(io.BytesIO(base64.b64decode(first["audio_base64"]))) as w:
+        assert w.getsampwidth() == 2
+        import struct
+        assert struct.unpack("<4h", w.readframes(4)) == tuple(int(m * 32767) for m in (0.01, 0.02, 0.03, 0.04))
+
+    again = client.post("/v2/speech/tts", json={"text": text, "language": "en"}).json()
+    assert again["cached"] is True and again["audio_base64"] == first["audio_base64"] and calls["infer"] == 4
