@@ -179,7 +179,14 @@ async def weather_series(
             units, stats = series["units"], series["statistics"]
         elif variable in _HOURLY_FIELD and statistic == "mean":
             key = _HOURLY_FIELD[variable]
-            values = [{"time_utc": p.time_utc.isoformat(), "value": getattr(p, key)} for p in fc.hourly]
+            if not fc.hourly:
+                # IMD publishes no hourly series; fill it the same way /v2/weather does (attributed).
+                run_supplement(fc, lat, lon, forecast_days)
+            values = [{"time_utc": p.time_utc.isoformat(), "value": getattr(p, key)} for p in fc.hourly
+                      if getattr(p, key) is not None]
+            if not values:
+                return {"status": "variable_unavailable", "variable": variable, "source": sel.selected_source,
+                        "fallback_reasons": sel.fallback_reasons}
             status, stats = "ok", ["deterministic"]
             units = {"temperature_c": "C", "precipitation_mm": "mm", "wind_speed_kmh": "km/h",
                      "cloud_cover_percent": "%", "pressure_hpa": "hPa", "humidity_percent": "%"}[key]
@@ -188,6 +195,7 @@ async def weather_series(
                     "available": sorted(((fc.ensemble or {}).get("series") or {}).keys()) or sorted(_HOURLY_FIELD)}
         return {"schema_version": "3.0.0", "status": status, "variable": variable, "statistic": statistic,
                 "available_statistics": stats, "units": units, "source": sel.selected_source,
+                "values_source": (fc.field_sources.get("hourly") or sel.selected_source) if not series else sel.selected_source,
                 "run_id": fc.provenance.run_id, "members": (fc.ensemble or {}).get("members"),
                 "values": values[:360], "provenance": fc.provenance.to_dict(), "fallback_reasons": sel.fallback_reasons}
 
