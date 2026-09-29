@@ -224,3 +224,42 @@ def test_valid_jwt_expiry_is_reported(upstreams, monkeypatch):
     reset_settings()
     assert imd_client.status()["jwt_expired"] is False and imd_client.status()["jwt_expires_at"]
     assert imd_client.fetch("current_weather").rows
+
+
+def test_pinned_imd_reaches_a_more_distant_station_with_a_label(upstreams, imd_keys):
+    # Vadodara is ~100 km from the nearest (fake) city station, Ahmedabad.
+    auto = service().select(22.30, 73.18)
+    assert auto.selected_source == "open_meteo"
+    assert auto.fallback_reasons[0]["reason"] == "no_station_nearby" and auto.degraded is False
+    pinned = service().select(22.30, 73.18, requested_source="imd")
+    assert pinned.selected_source == "imd"
+    fc = pinned.forecast
+    assert fc.provenance.station["name"] == "Ahmedabad" and fc.provenance.station["distant"] is True
+    assert any("beyond the local range" in n for n in fc.provenance.notes)
+    # "Now" must not come from the 100 km-away station: the nearby AWS station answers instead.
+    assert fc.current_kind == "observation"
+    assert fc.provenance.station["observation_station"]["name"] == "Vadodara Aws (AWS)"
+    assert fc.current.temperature_c == 31.4 and fc.current.condition == "Clear Sky"
+    assert fc.current.wind_speed_kmh is None      # AWS wind unit is undocumented: not trusted
+
+
+def test_pinned_imd_still_has_a_limit(upstreams, imd_keys):
+    sel = service().select(15.3, 74.1, requested_source="imd")   # Goa: ~490 km from any fake station
+    assert sel.forecast is None and sel.fallback_reasons[0]["reason"] == "no_station_nearby"
+
+
+def test_aws_fills_now_when_no_synop_station_is_close(upstreams, imd_keys, monkeypatch):
+    from weathergpt.config import reset_settings
+    monkeypatch.setenv("IMD_MAX_STATION_KM", "120")
+    reset_settings()
+    fc = service().select(22.30, 73.18).forecast
+    assert fc.provenance.source == "imd" and fc.current.temperature_c == 31.4
+    assert fc.provenance.station["observation"]["network"] == "aws"
+
+
+def test_stale_aws_observation_is_rejected(upstreams, imd_keys):
+    old = datetime.now(timezone.utc) - timedelta(hours=9)
+    upstreams.imd_rows["aws_data"][0].update({"DATE": old.date().isoformat(), "TIME": old.strftime("%H:%M:%S")})
+    fc = service().select(22.30, 73.18, requested_source="imd").forecast
+    assert fc.current_kind is None
+    assert any("AWS observation not used" in n for n in fc.provenance.notes)

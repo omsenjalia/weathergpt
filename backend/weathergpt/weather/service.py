@@ -91,7 +91,7 @@ class ForecastService:
                                              "message": "Temporarily skipped after repeated failures",
                                              **provider.breaker.to_dict()})
                 continue
-            result = provider.fetch(lat, lon, forecast_days=forecast_days, model=model, run_id=run_id)
+            result = provider.fetch(lat, lon, forecast_days=forecast_days, model=model, run_id=run_id, pinned=pinned)
             if not result.ok or result.forecast is None:
                 if result.transient:
                     provider.breaker.record(False)
