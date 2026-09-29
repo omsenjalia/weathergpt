@@ -269,6 +269,8 @@ class Settings:
     bhashini_api_key: Optional[str] = None
     bhashini_pipeline_id: str = "64392f96daac500b55c543cd"
     nominatim_user_agent: str = "WeatherGPT/3.0 (+https://github.com/omsenjalia/weathergpt)"
+    # Shared secret the apps must send as X-Backend-Secret. Unset = open (local development).
+    backend_secret: Optional[str] = None
 
     @property
     def has_llm(self) -> bool:
@@ -351,6 +353,7 @@ def load_settings() -> Settings:
         bhashini_api_key=env("BHASHINI_ULCA_API_KEY") or env("BHASHINI_API_KEY"),
         bhashini_pipeline_id=env("BHASHINI_PIPELINE_ID") or "64392f96daac500b55c543cd",
         nominatim_user_agent=env("NOMINATIM_USER_AGENT") or "WeatherGPT/3.0 (+https://github.com/omsenjalia/weathergpt)",
+        backend_secret=env("BACKEND_SECRET"),
     )
 
 
