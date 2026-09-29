@@ -16,7 +16,8 @@ from weathergpt import http
 IST = timezone(timedelta(hours=5, minutes=30))
 CLEAR_ENV = ("GROQ_API_KEY", "IMD_API_KEY", "IMD_JWT_TOKEN", "WEATHERNEXT_ENABLED", "WEATHERNEXT_MOCK_DATA",
              "WEATHER_PROVIDER_PRIORITY", "TYPESAFE_API_KEY", "BHASHINI_USER_ID", "BHASHINI_ULCA_API_KEY",
-             "BHASHINI_API_KEY", "ADMIN_TOKEN", "WEATHER_SUPPLEMENT_ENABLED", "WEATHER_ALERTS_ENABLED")
+             "BHASHINI_API_KEY", "ADMIN_TOKEN", "WEATHER_SUPPLEMENT_ENABLED", "WEATHER_ALERTS_ENABLED",
+             "IMD_RELAY_TOKEN", "IMD_BASE_URL", "IMD_EMAIL", "IMD_PASSWORD")
 
 
 def open_meteo_payload(offset_seconds: int = 19800, tz: str = "Asia/Kolkata") -> dict:

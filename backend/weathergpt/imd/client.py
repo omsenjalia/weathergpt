@@ -7,6 +7,9 @@ Missing either header is rejected with 401; a bad JWT with
 ``{"error": "Invalid or expired JWT token"}``. Access is additionally
 IP-whitelisted by IMD.
 
+Relay mode (IMD_RELAY_TOKEN set): requests go to IMD_BASE_URL (the relay in
+``relay/imd_relay.py``) with only ``X-Relay-Token``. The relay adds the key and JWT.
+
 Responses are either a JSON array of rows or an envelope
 ``{"status", "message", "totalCount", "data"}``; both are normalised to ``rows``.
 """
@@ -154,7 +157,10 @@ def reset_tokens() -> None:
         _minted.update(token=None, expires=None, at=None, error=None)
 
 
-def _auth_headers(token: str) -> dict:
+def _auth_headers(token: Optional[str]) -> dict:
+    cfg = settings().imd
+    if cfg.relay:
+        return {"X-Relay-Token": cfg.relay_token or "", "Accept": "application/json", "User-Agent": "WeatherGPT/3.0"}
     return {
         "X-API-KEY": settings().imd.api_key or "",
         "Authorization": f"Bearer {token}",
@@ -234,7 +240,7 @@ def fetch(key: str, params: Optional[dict] = None, *, use_cache: bool = True) ->
     started = time.perf_counter()
     try:
         # An already-expired token is caught here, before a gateway call is spent on it.
-        reply = _get(url, clean, current_token())
+        reply = _get(url, clean, None if cfg.relay else current_token())
         if reply.status == 401 and cfg.can_mint and "token" in reply.text.lower():
             reply = _get(url, clean, current_token(force_refresh=True))  # rejected early: renew once
     except IMDError as err:
@@ -275,7 +281,7 @@ def fetch(key: str, params: Optional[dict] = None, *, use_cache: bool = True) ->
     return resp
 
 
-def _get(url: str, params: dict, token: str) -> "http.Reply":
+def _get(url: str, params: dict, token: Optional[str]) -> "http.Reply":
     _stats["calls"] += 1
     try:
         return http.send("GET", url, params=params, headers=_auth_headers(token),
@@ -295,7 +301,8 @@ def status() -> dict:
     cfg = settings().imd
     expires = _minted["expires"] if _minted["token"] else jwt_expiry(cfg.jwt_token)
     return {
-        "token_source": "minted" if _minted["token"] else ("env" if cfg.jwt_token else None),
+        "relay": cfg.relay,
+        "token_source": "relay" if cfg.relay else ("minted" if _minted["token"] else ("env" if cfg.jwt_token else None)),
         "auto_renew": cfg.can_mint,
         "last_renewal_at": _minted["at"],
         "last_renewal_error": _minted["error"],
@@ -306,7 +313,8 @@ def status() -> dict:
         "enabled": cfg.enabled,
         "missing": cfg.missing(),
         "base_url": cfg.base_url,
-        "auth_scheme": "X-API-KEY (bound to server IP) + Authorization: Bearer <JWT from POST /api/oauth/token.php>",
+        "auth_scheme": ("X-Relay-Token (the relay adds X-API-KEY and the JWT)" if cfg.relay else
+                        "X-API-KEY (bound to server IP) + Authorization: Bearer <JWT from POST /api/oauth/token.php>"),
         "max_station_km": cfg.max_station_km,
         "calls": _stats["calls"],
         "errors": _stats["errors"],

@@ -57,6 +57,13 @@ terms prohibit redistribution (`IMD_PUBLIC_PROXY=1` opens it). `GET /dev/imd/pro
 Auth: `X-API-KEY` + `Authorization: Bearer <JWT>`; JWTs come from `POST /api/oauth/token.php`
 `{email, password}` → `{access_token, expires_in: 3600}` and are renewed two minutes before expiry.
 
+**Relay (production on Vercel).** IMD binds the key to one caller IP and Vercel has no fixed egress IP, so
+production calls IMD through `relay/imd_relay.py` (repo root) on a host with a fixed, whitelisted IP. The relay
+holds `IMD_API_KEY`/`IMD_EMAIL`/`IMD_PASSWORD`, mints JWTs, and forwards `GET /api/v1/<endpoint>` only for callers
+sending `X-Relay-Token`. On Vercel set `IMD_BASE_URL=http://<relay host>:<port>/api/v1` and `IMD_RELAY_TOKEN`
+(the same secret); no IMD credentials are needed there. The relay is standard-library Python:
+`python imd_relay.py`, configured by env vars or a `.env` next to it.
+
 Note the colour scales: `districtwarning` uses 1 = red … 4 = green, `districtnowcast` uses 1 = green … 4 = red.
 
 ## Layout
