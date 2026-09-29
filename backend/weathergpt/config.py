@@ -92,7 +92,9 @@ class IMDSettings:
     # needs X-Admin-Token unless this is explicitly enabled.
     public_proxy: bool = False
     timeout_seconds: float = 8.0
-    max_station_km: float = 35.0          # nearest city-forecast station must be this close
+    max_station_km: float = 50.0          # auto: nearest city-forecast station must be this close
+    pinned_max_station_km: float = 150.0  # requested_source=imd: accept a more distant station (labelled)
+    observation_max_km: float = 35.0      # synop / AWS station used for "now" must be this close
     observation_max_age_hours: float = 4.0   # synoptic reports are 3-hourly and arrive late
     enabled: bool = True
 
@@ -309,7 +311,9 @@ def load_settings() -> Settings:
             public_proxy=env_bool("IMD_PUBLIC_PROXY", False),
             base_url=(env("IMD_BASE_URL") or "https://api.imd.gov.in/api/v1").rstrip("/"),
             timeout_seconds=env_float("IMD_TIMEOUT_SECONDS", 8.0),
-            max_station_km=env_float("IMD_MAX_STATION_KM", 35.0),
+            max_station_km=env_float("IMD_MAX_STATION_KM", 50.0),
+            pinned_max_station_km=env_float("IMD_PINNED_MAX_STATION_KM", 150.0),
+            observation_max_km=env_float("IMD_OBSERVATION_MAX_KM", 35.0),
             observation_max_age_hours=env_float("IMD_OBSERVATION_MAX_AGE_HOURS", 4.0),
             enabled=env_bool("IMD_ENABLED", True),
         ),

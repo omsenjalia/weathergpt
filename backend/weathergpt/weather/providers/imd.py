@@ -74,6 +74,36 @@ def parse_city_forecast(row: dict, today_ist) -> tuple[list[DayPoint], dict, Opt
     return daily, observed, issued
 
 
+def parse_aws_observation(row: dict, now: datetime, max_age_hours: float) -> tuple[Optional[HourPoint], dict]:
+    """aws_data row (DATE + TIME in UTC). Wind speed is left out: its unit is not documented."""
+    observed_at = observation_time_utc(row)
+    meta = {"observed_at_utc": observed_at.isoformat() if observed_at else None, "station": text(row, "STATION"),
+            "network": "aws", "rainfall_mm": number(row, "RAINFALL", low=0, high=2000)}
+    if observed_at is None:
+        meta["rejected"] = "no_observation_time"
+        return None, meta
+    age_h = (now - observed_at).total_seconds() / 3600.0
+    if age_h > max_age_hours or age_h < -1:
+        meta["rejected"] = f"observation_age_{age_h:.1f}h"
+        return None, meta
+    message = text(row, "WEATHER_MESSAGE")
+    ww = number(row, "WEATHER_CODE", low=0, high=99)
+    okta = number(row, "NEBULOSITY", low=0, high=9)
+    code, condition = from_imd_present_weather(int(ww) if ww is not None else None, okta)
+    wind_dir = number(row, "WIND_DIRECTION", low=0, high=360)
+    return HourPoint(
+        time_utc=observed_at,
+        temperature_c=number(row, "CURR_TEMP", low=-60, high=60),
+        feels_like_c=number(row, "Feel Like", low=-60, high=70),
+        humidity_percent=number(row, "RH", low=0, high=100),
+        pressure_hpa=number(row, "MSLP", low=800, high=1100),
+        pressure_type="msl",
+        wind_direction_deg=wind_dir if wind_dir not in (None, 0.0) else None,
+        weather_code=code,
+        condition=(message[:1].upper() + message[1:]) if message else condition,
+    ), meta
+
+
 def parse_observation(row: dict, now: datetime, max_age_hours: float) -> tuple[Optional[HourPoint], dict]:
     observed_at = observation_time_utc(row)
     ww = number(row, "Weather Code", "Weather_Code", "WEATHER_CODE", low=0, high=99)
@@ -142,10 +172,14 @@ class IMDProvider(Provider):
             return fail(exc.reason, str(exc), exc.transient)
         if station is None:
             return fail("no_data", "IMD returned no city-forecast stations with coordinates", True)
-        if station.distance_km > cfg.max_station_km:
+        # A pin (requested_source=imd) accepts a more distant forecast station, clearly labelled;
+        # auto mode keeps a local radius so a far station never outranks a model grid point.
+        limit = cfg.pinned_max_station_km if options.get("pinned") else cfg.max_station_km
+        if station.distance_km > limit:
             return fail("no_station_nearby",
                         f"Nearest IMD city station {station.name} is {station.distance_km:.0f} km away "
-                        f"(limit {cfg.max_station_km:.0f} km)", station=station.to_dict())
+                        f"(limit {limit:.0f} km)", station=station.to_dict())
+        distant = station.distance_km > cfg.max_station_km
 
         now = datetime.now(timezone.utc)
         today_ist = now.astimezone(IST).date()
@@ -157,8 +191,10 @@ class IMDProvider(Provider):
         obs_station = station
         try:
             obs_row = stations.observation_for(station)
+            if obs_row is not None and station.distance_km > cfg.observation_max_km:
+                obs_row = None  # the forecast station is too far away to stand for "now" here
             if obs_row is None:
-                nearest = stations.nearest_observation(lat, lon, cfg.max_station_km)
+                nearest = stations.nearest_observation(lat, lon, cfg.observation_max_km)
                 if nearest is not None:
                     obs_row, obs_station = nearest
                     notes.append(f"observation from nearest reporting station {obs_station.name} "
@@ -171,6 +207,23 @@ class IMDProvider(Provider):
                     notes.append(f"observation not used: {obs_meta.get('rejected')}")
         except client.IMDError as exc:
             notes.append(f"current_wx unavailable: {exc.reason}")
+
+        if current is None:
+            try:
+                aws = stations.nearest_aws(lat, lon, cfg.observation_max_km)
+            except client.IMDError as exc:
+                aws = None
+                notes.append(f"aws_data unavailable: {exc.reason}")
+            if aws is not None:
+                aws_current, aws_meta = parse_aws_observation(aws[0], now, cfg.observation_max_age_hours)
+                if aws_current is not None:
+                    current, obs_station, obs_meta = aws_current, aws[1], aws_meta
+                    notes.append(f"observation from AWS station {aws[1].name} ({aws[1].distance_km:.0f} km)")
+                else:
+                    notes.append(f"AWS observation not used: {aws_meta.get('rejected')}")
+        if distant:
+            notes.append(f"forecast from IMD city station {station.name}, {station.distance_km:.0f} km away "
+                         "(beyond the local range; requested source pinned to IMD)")
 
         if not daily and current is None:
             return fail("no_data", f"IMD station {station.name} has no current forecast", True, station=station.to_dict())
@@ -196,6 +249,7 @@ class IMDProvider(Provider):
                 sampled_lat=station.lat, sampled_lon=station.lon, distance_km=round(station.distance_km, 2),
                 spatial_method="nearest_city_station", station={**station.to_dict(), "observation": obs_meta or None,
                                                                 "observation_station": obs_station.to_dict() if current else None,
+                                                                "distant": distant,
                                                                 "observed": observed},
                 sources=["imd:cityforecastloc"] + (["imd:current_wx"] if current else []),
                 methods={

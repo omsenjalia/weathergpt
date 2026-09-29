@@ -80,6 +80,18 @@ def imd_current_rows() -> list[dict]:
              "Weather Code": "2", "Nebulosity": "6", "Humidity": "70"}]
 
 
+def aws_rows() -> list[dict]:
+    """aws_data as served live: DATE + TIME (UTC), underscores in names, undocumented wind unit."""
+    obs = datetime.now(timezone.utc) - timedelta(minutes=30)
+    return [{"ID": "A0VADO01", "CALL_SIGN": None, "DISTRICT": "VADODARA", "STATE": "GUJARAT",
+             "STATION": "VADODARA_AWS", "DATE": obs.date().isoformat(), "TIME": obs.strftime("%H:%M:%S"),
+             "CURR_TEMP": "31.4", "RH": "62", "WIND_DIRECTION": "240", "WIND_SPEED": 3.7, "MSLP": "1006.5",
+             "Latitude": "22.31", "Longitude": "73.19", "WEATHER_CODE": "0", "NEBULOSITY": "2",
+             "RAINFALL": "0.0", "Feel Like": "34.0", "WEATHER_MESSAGE": "Clear Sky"},
+            {"ID": "A0NOTEMP", "STATION": "BROKEN", "DATE": obs.date().isoformat(), "TIME": obs.strftime("%H:%M:%S"),
+             "CURR_TEMP": None, "Latitude": "22.30", "Longitude": "73.18"}]
+
+
 def district_warning_rows() -> list[dict]:
     today = datetime.now(IST).date().isoformat()
     return [{"Obj_id": "210", "Date": today, "UTC": "0600", "District": "AHMADABAD",
@@ -120,6 +132,7 @@ class FakeUpstreams:
                          "cityforecast_mapping": [{"Station_Code": "43003", "Station_Name": "Mumbai-Santacruz",
                                                    "Latitude": "19.1", "Longitude": "72.85"}],
                          "cityforecastwarning": [],
+                         "aws_data": aws_rows(),
                          "districtwarning": district_warning_rows(), "districtnowcast": []}
         self.imd_status: int = 200
         self.imd_error: str = ""

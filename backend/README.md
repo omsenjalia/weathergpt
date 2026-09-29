@@ -22,7 +22,7 @@ request ─► provider chain ─────────────► supplem
 
 | Provider | Supplies | Needs |
 |---|---|---|
-| **IMD** | nearest city station (≤ 35 km): official 7-day forecast + observation from the nearest reporting station; district & station warnings, nowcast | `IMD_API_KEY` (bound to the server IP) + `IMD_EMAIL`/`IMD_PASSWORD` (the backend mints 1-hour JWTs itself) |
+| **IMD** | nearest city station (≤ 50 km; ≤ 150 km when `requested_source=imd`, labelled as distant): official 7-day forecast + "now" from the nearest synop or AWS station within 35 km; district & station warnings, nowcast | `IMD_API_KEY` (bound to the server IP) + `IMD_EMAIL`/`IMD_PASSWORD` (the backend mints 1-hour JWTs itself) |
 | **WeatherNext** | hourly 64-member ensemble statistics (mean, p10–p90), 15 days | `WEATHERNEXT_ENABLED=1`, BigQuery table + Google credentials |
 | **Open-Meteo** | global baseline; hourly, UV, AQI, sun times; ERA5 archive | nothing |
 

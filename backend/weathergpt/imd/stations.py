@@ -109,3 +109,22 @@ def nearest_observation(lat: float, lon: float, max_km: float) -> Optional[tuple
         if d <= max_km and (best is None or d < best[1].distance_km):
             best = (row, Station(code, text(row, "Station") or name, s_lat, s_lon, d, row))
     return best
+
+
+def nearest_aws(lat: float, lon: float, max_km: float) -> Optional[tuple[dict, Station]]:
+    """Nearest reporting AWS / ARG station (``aws_data``, ~1,100 stations with coordinates).
+
+    Denser than the synoptic network, so it covers many places whose nearest city
+    station does not observe.
+    """
+    best: Optional[tuple[dict, Station]] = None
+    for row in iter_dicts(client.fetch("aws_data").rows):
+        s_lat = number(row, "Latitude", low=-90, high=90)
+        s_lon = number(row, "Longitude", low=-180, high=180)
+        if s_lat is None or s_lon is None or number(row, "CURR_TEMP", low=-60, high=60) is None:
+            continue
+        d = haversine_km(lat, lon, s_lat, s_lon)
+        if d <= max_km and (best is None or d < best[1].distance_km):
+            name = (text(row, "STATION") or text(row, "ID") or "AWS").replace("_", " ").title()
+            best = (row, Station(text(row, "ID") or name, f"{name} (AWS)", s_lat, s_lon, d, row))
+    return best
