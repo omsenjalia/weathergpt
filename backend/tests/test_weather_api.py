@@ -163,3 +163,13 @@ def test_series_and_health(client, upstreams):
     h = client.get("/v2/weather/health").json()
     assert h["provider_priority"] == ["imd", "weathernext", "open_meteo"]
     assert set(h["provider_health"]) == {"imd", "weathernext", "open_meteo"}
+
+
+def test_series_with_imd_primary_uses_attributed_hourly(client, upstreams, imd_keys):
+    # IMD has no hourly series: /series must fill it (attributed) rather than answer "ok" with no values.
+    s = client.get("/v2/weather/series", params={"lat": 23.03, "lon": 72.58, "variable": "temperature_2m"}).json()
+    assert s["status"] == "ok" and s["source"] == "imd"
+    assert s["values_source"] == "open_meteo" and len(s["values"]) > 24
+    om = client.get("/v2/weather/series", params={"lat": 23.03, "lon": 72.58, "variable": "temperature_2m",
+                                                   "requested_source": "open_meteo"}).json()
+    assert om["values_source"] == "open_meteo" and om["values"]
