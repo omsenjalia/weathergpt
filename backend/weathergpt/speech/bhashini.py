@@ -17,10 +17,14 @@ one config call per language, not one per utterance.
 from __future__ import annotations
 
 import base64
+import concurrent.futures
 import re
 import struct
+import sys
 import threading
 import time
+from array import array
+from collections import OrderedDict
 from dataclasses import dataclass
 
 from weathergpt import http
@@ -38,6 +42,10 @@ SUPPORTED_LANGUAGES = ("en", "hi", "gu", "mr", "ta", "te", "kn", "ml", "bn")
 # TTS models degrade on long inputs; long answers are split and the WAVs concatenated.
 TTS_CHUNK_CHARS = 380
 TTS_MAX_CHARS = 2400
+# Chunks of one answer are synthesized concurrently; finished answers are kept per instance
+# so a replayed answer (the app's "speak again") skips Bhashini entirely.
+TTS_PARALLEL = 4
+TTS_CACHE_SIZE = 24
 # Vercel caps request bodies at ~4.5 MB; 16 kHz mono PCM is ~32 KB/s.
 ASR_MAX_BYTES = 3_000_000
 
@@ -85,9 +93,14 @@ _cache: dict[tuple[str, str], _Service] = {}
 _cache_lock = threading.Lock()
 
 
+_tts_cache: "OrderedDict[tuple[str, str, str], dict]" = OrderedDict()
+_tts_pool = concurrent.futures.ThreadPoolExecutor(max_workers=TTS_PARALLEL, thread_name_prefix="tts")
+
+
 def clear_cache() -> None:
     with _cache_lock:
         _cache.clear()
+        _tts_cache.clear()
 
 
 def _resolve_service(task: str, language: str) -> _Service:
@@ -235,6 +248,29 @@ def concat_wavs(parts: list[bytes]) -> tuple[bytes, int]:
     return _build_wav(fmt, b"".join(frames)), struct.unpack("<I", fmt[4:8])[0]
 
 
+def to_pcm16(wav: bytes) -> bytes:
+    """IEEE-float WAV -> 16-bit PCM WAV (same rate and channels); other formats pass through.
+
+    Bhashini returns 32-bit float samples: twice the bytes of 16-bit PCM with no audible
+    gain for speech, and the payload is what the phone waits on before playback.
+    """
+    fmt, frames = _parse_wav(wav)
+    tag, channels, rate, _, _, bits = struct.unpack("<HHIIHH", fmt[:16])
+    if tag == 0xFFFE and len(fmt) >= 26:  # WAVE_FORMAT_EXTENSIBLE: real tag leads the subformat GUID
+        tag = struct.unpack("<H", fmt[24:26])[0]
+    if tag != 3 or bits != 32:
+        return wav
+    samples = array("f")
+    samples.frombytes(frames[: len(frames) - len(frames) % 4])
+    if sys.byteorder == "big":
+        samples.byteswap()
+    pcm = array("h", [int(max(-1.0, min(1.0, x)) * 32767) for x in samples])
+    if sys.byteorder == "big":
+        pcm.byteswap()
+    new_fmt = struct.pack("<HHIIHH", 1, channels, rate, rate * channels * 2, channels * 2, 16)
+    return _build_wav(new_fmt, pcm.tobytes())
+
+
 def synthesize(text: str, language: str, gender: str = "female") -> dict:
     lang = normalize_language(language)
     voice = gender if gender in ("male", "female") else "female"
@@ -242,9 +278,16 @@ def synthesize(text: str, language: str, gender: str = "female") -> dict:
     if not chunks:
         raise ValueError("text is empty")
 
+    key = (lang, voice, text[:TTS_MAX_CHARS])
+    with _cache_lock:
+        hit = _tts_cache.get(key)
+        if hit is not None:
+            _tts_cache.move_to_end(key)
+            return {**hit, "cached": True}
+
     service = _resolve_service("tts", lang)
-    wavs: list[bytes] = []
-    for chunk in chunks:
+
+    def one(chunk: str) -> bytes:
         data = _compute(service, {
             "pipelineTasks": [{
                 "taskType": "tts",
@@ -253,13 +296,17 @@ def synthesize(text: str, language: str, gender: str = "female") -> dict:
             "inputData": {"input": [{"source": chunk}], "audio": [{"audioContent": None}]},
         })
         try:
-            content = data["pipelineResponse"][0]["audio"][0]["audioContent"]
-            wavs.append(base64.b64decode(content))
+            return base64.b64decode(data["pipelineResponse"][0]["audio"][0]["audioContent"])
         except (KeyError, IndexError, TypeError, ValueError) as exc:
             raise SpeechUpstreamError("Bhashini TTS response had no audio") from exc
 
+    wavs = [one(chunks[0])] if len(chunks) == 1 else list(_tts_pool.map(one, chunks))
     audio, rate = (wavs[0], _wav_rate(wavs[0])) if len(wavs) == 1 else concat_wavs(wavs)
-    return {
+    try:
+        audio = to_pcm16(audio)
+    except ValueError as exc:
+        raise SpeechUpstreamError("Bhashini returned malformed audio") from exc
+    result = {
         "audio_base64": base64.b64encode(audio).decode("ascii"),
         "audio_format": "wav",
         "sample_rate": rate,
@@ -270,6 +317,11 @@ def synthesize(text: str, language: str, gender: str = "female") -> dict:
         "provider": "bhashini",
         "service_id": service.service_id,
     }
+    with _cache_lock:
+        _tts_cache[key] = result
+        while len(_tts_cache) > TTS_CACHE_SIZE:
+            _tts_cache.popitem(last=False)
+    return {**result, "cached": False}
 
 
 def _wav_rate(data: bytes) -> int | None:
